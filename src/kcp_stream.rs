@@ -3,6 +3,7 @@ use hbb_common::{
     bytes::{Bytes, BytesMut},
     bytes_codec::BytesCodec,
     config, log,
+    sodiumoxide::crypto::secretbox,
     tcp::{DynTcpStream, FramedStream},
     tokio::{self, net::UdpSocket, sync::mpsc, sync::oneshot},
     tokio_util, ResultType, Stream,
@@ -13,11 +14,15 @@ use kcp_sys::{
     stream,
 };
 use std::{net::SocketAddr, sync::Arc};
+use crate::media::{self, MediaChannel, Reassembler};
 
 pub struct KcpStream {
     endpoint: KcpEndpoint,
     conn_id: ConnId,
     stop_sender: Option<oneshot::Sender<()>>,
+    media: Arc<MediaChannel>,
+    media_receiver: Option<mpsc::Receiver<Bytes>>,
+    media_keys: Arc<std::sync::Mutex<Option<(secretbox::Key, secretbox::Key)>>>,
 }
 
 const KCP_IO_ERR_LOG_INTERVAL: std::time::Duration = std::time::Duration::from_secs(5);
@@ -75,12 +80,19 @@ impl KcpStream {
                 .ok_or_else(|| anyhow::anyhow!("Failed to get output receiver"))?,
         );
         let (stop_sender, stop_receiver) = oneshot::channel();
+        let (media, media_watch) = MediaChannel::new(true);
+        let (media_tx, media_receiver) = mpsc::channel(16);
+        let media_keys = Arc::new(std::sync::Mutex::new(None));
         if let Some(packet) = init_packet {
             if packet.len() >= std::mem::size_of::<KcpPacketHeader>() {
                 input.send(packet.into()).await?;
             }
         }
-        Self::kcp_io(udp_socket.clone(), input, output, stop_receiver).await;
+        Self::kcp_io(
+            udp_socket.clone(), input, output, stop_receiver, media_watch, media_tx,
+            media_keys.clone(),
+        )
+        .await;
 
         let conn_id = tokio::time::timeout(timeout, endpoint.accept()).await??;
         if let Some(stream) = stream::KcpStream::new(&endpoint, conn_id) {
@@ -89,6 +101,9 @@ impl KcpStream {
                     endpoint,
                     conn_id,
                     stop_sender: Some(stop_sender),
+                    media,
+                    media_receiver: Some(media_receiver),
+                    media_keys,
                 },
                 Self::create_framed(stream, udp_socket.local_addr().ok()),
             ))
@@ -112,7 +127,14 @@ impl KcpStream {
                 .ok_or_else(|| anyhow::anyhow!("Failed to get output receiver"))?,
         );
         let (stop_sender, stop_receiver) = oneshot::channel();
-        Self::kcp_io(udp_socket.clone(), input, output, stop_receiver).await;
+        let (media, media_watch) = MediaChannel::new(true);
+        let (media_tx, media_receiver) = mpsc::channel(16);
+        let media_keys = Arc::new(std::sync::Mutex::new(None));
+        Self::kcp_io(
+            udp_socket.clone(), input, output, stop_receiver, media_watch, media_tx,
+            media_keys.clone(),
+        )
+        .await;
 
         let conn_id = endpoint.connect(timeout, 0, 0, Bytes::new()).await?;
         if let Some(stream) = stream::KcpStream::new(&endpoint, conn_id) {
@@ -121,6 +143,9 @@ impl KcpStream {
                     endpoint,
                     conn_id,
                     stop_sender: Some(stop_sender),
+                    media,
+                    media_receiver: Some(media_receiver),
+                    media_keys,
                 },
                 Self::create_framed(stream, udp_socket.local_addr().ok()),
             ))
@@ -134,10 +159,15 @@ impl KcpStream {
         input: mpsc::Sender<KcpPacket>,
         mut output: mpsc::Receiver<KcpPacket>,
         mut stop_receiver: oneshot::Receiver<()>,
+        mut media_receiver: hbb_common::tokio::sync::watch::Receiver<Bytes>,
+        media_in_sender: mpsc::Sender<Bytes>,
+        media_keys: Arc<std::sync::Mutex<Option<(secretbox::Key, secretbox::Key)>>>,
     ) {
         let udp = udp_socket.clone();
         tokio::spawn(async move {
             let mut buf = vec![0; 1500];
+            let mut media_frame_id = 0u64;
+            let mut reassembler = Reassembler::default();
             // Socket errors are ICMP unreachable on a connected UDP socket — advisory, and
             // routine while a hole forms — so treat them as loss and let KCP's pong timeout reap
             // a link that is really dead. One throttle PER DIRECTION: the error is reported once
@@ -156,9 +186,43 @@ impl KcpStream {
                             tokio::time::sleep(std::time::Duration::from_millis(10)).await;
                         }
                     }
+                    changed = media_receiver.changed() => {
+                        if changed.is_err() {
+                            break;
+                        }
+                        let data = media_receiver.borrow_and_update().clone();
+                        if data.is_empty() {
+                            continue;
+                        }
+                        let key = media_keys
+                            .lock()
+                            .ok()
+                            .and_then(|keys| keys.as_ref().map(|keys| keys.0.clone()));
+                        let Some(key) = key else {
+                            continue;
+                        };
+                        for packet in media::packetize(&key, media_frame_id, &data) {
+                            if udp.send(&packet).await.is_err() {
+                                break;
+                            }
+                        }
+                        media_frame_id = media_frame_id.wrapping_add(1);
+                    }
                     result = udp.recv_from(&mut buf) => {
                         match result {
                             Ok((size, _)) => {
+                                if size >= media::HEADER_LEN && &buf[..4] == media::MAGIC {
+                                    let key = media_keys
+                                        .lock()
+                                        .ok()
+                                        .and_then(|keys| keys.as_ref().map(|keys| keys.1.clone()));
+                                    if let Some(key) = key {
+                                        if let Some(frame) = reassembler.push(&buf[..size], &key) {
+                                            media_in_sender.try_send(frame).ok();
+                                        }
+                                    }
+                                    continue;
+                                }
                                 if size < std::mem::size_of::<KcpPacketHeader>() {
                                     continue;
                                 }
@@ -181,6 +245,24 @@ impl KcpStream {
                 }
             }
         });
+    }
+
+    pub fn set_media_keys(&self, send: secretbox::Key, receive: secretbox::Key) {
+        if let Ok(mut keys) = self.media_keys.lock() {
+            *keys = Some((send, receive));
+        }
+    }
+
+    pub fn set_media_enabled(&self, enabled: bool) {
+        self.media.set_enabled(enabled);
+    }
+
+    pub fn media_channel(&self) -> Arc<MediaChannel> {
+        self.media.clone()
+    }
+
+    pub fn take_media_receiver(&mut self) -> Option<mpsc::Receiver<Bytes>> {
+        self.media_receiver.take()
     }
 }
 

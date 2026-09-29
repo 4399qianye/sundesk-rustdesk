@@ -108,7 +108,7 @@ pub const MILLI1: Duration = Duration::from_millis(1);
 pub const SEC30: Duration = Duration::from_secs(30);
 // Empirical restart reconnect grace window.
 const RESTART_REMOTE_DEVICE_GRACE: Duration = Duration::from_secs(5 * 60);
-pub const VIDEO_QUEUE_SIZE: usize = 120;
+pub const VIDEO_QUEUE_SIZE: usize = if cfg!(feature = "low-latency-video") { 3 } else { 120 };
 const MAX_DECODE_FAIL_COUNTER: usize = 3;
 
 pub const LOGIN_MSG_PASSWORD_EMPTY: &str = "Empty Password";
@@ -1713,6 +1713,12 @@ impl Client {
                                 // A WebRTC stream is encrypted by DTLS and takes no stream
                                 // key of its own, split or not, so the pick says what runs: 0.
                                 let picked = if is_webrtc {
+                                    0
+                                } else if cfg!(feature = "low-latency-video") {
+                                    // The media plane uses the authenticated KCP key. Keep the
+                                    // low-latency profile on the original symmetric key scheme so
+                                    // the side-channel does not require a third-party submodule
+                                    // change to expose the split receive key.
                                     0
                                 } else {
                                     hbb_common::tcp::kx_version_for(kx_version)
@@ -3881,6 +3887,9 @@ impl LoginConfigHandler {
             os_login,
             hwid,
             avatar,
+            low_latency_video: cfg!(feature = "low-latency-video")
+                && (self.conn_type == ConnType::DEFAULT_CONN
+                    || self.conn_type == ConnType::VIEW_CAMERA),
             ..Default::default()
         };
         match self.conn_type {

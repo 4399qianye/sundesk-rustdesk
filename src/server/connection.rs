@@ -22,6 +22,7 @@ use crate::{
     },
     display_service, ipc, privacy_mode, video_service, VERSION,
 };
+use crate::media::MediaChannel;
 #[cfg(any(target_os = "android", target_os = "ios"))]
 use crate::{common::DEVICE_NAME, flutter::connection_manager::start_channel};
 use cidr_utils::cidr::IpCidr;
@@ -35,6 +36,7 @@ use hbb_common::{
     },
     futures::{SinkExt, StreamExt},
     get_time, get_version_number,
+    protobuf::Message as _,
     password_security::{self as password, ApproveMode},
     sha2::{Digest, Sha256},
     sleep, timeout,
@@ -242,6 +244,7 @@ pub struct ConnInner {
     id: i32,
     tx: Option<Sender>,
     tx_video: Option<Sender>,
+    media: Option<Arc<MediaChannel>>,
 }
 
 struct InputMouse {
@@ -357,6 +360,8 @@ pub struct Connection {
     inner: ConnInner,
     display_idx: usize,
     stream: super::Stream,
+    kcp: Option<crate::kcp_stream::KcpStream>,
+    media_channel: Option<Arc<MediaChannel>>,
     server: super::ServerPtrWeak,
     hash: Hash,
     read_jobs: Vec<fs::TransferJob>,
@@ -466,8 +471,9 @@ pub struct Connection {
 
 impl ConnInner {
     pub fn new(id: i32, tx: Option<Sender>, tx_video: Option<Sender>) -> Self {
-        Self { id, tx, tx_video }
+        Self { id, tx, tx_video, media: None }
     }
+
 }
 
 impl Subscriber for ConnInner {
@@ -478,6 +484,32 @@ impl Subscriber for ConnInner {
 
     #[inline]
     fn send(&mut self, msg: Arc<Message>) {
+        if let (Some(media), Some(message::Union::VideoFrame(vf))) =
+            (self.media.as_ref(), msg.union.as_ref())
+        {
+            if media.is_enabled() {
+                if let Ok(bytes) = msg.write_to_bytes() {
+                    if media.is_raw() {
+                        media.send(bytes.into());
+                    } else {
+                        let mut media_msg = Message::new();
+                        media_msg.set_media_frame(MediaFrame {
+                            data: bytes.into(),
+                            ..Default::default()
+                        });
+                        self.tx_video.as_mut().map(|tx| {
+                            allow_err!(tx.send((Instant::now(), Arc::new(media_msg))));
+                        });
+                    }
+                    video_service::notify_video_frame_fetched(
+                        vf.display as usize,
+                        self.id,
+                        Some(Instant::now().into()),
+                    );
+                    return;
+                }
+            }
+        }
         // Send SwitchDisplay on the same channel as VideoFrame to avoid send order problems.
         let tx_by_video = match &msg.union {
             Some(message::Union::VideoFrame(_)) => true,
@@ -528,6 +560,7 @@ impl Connection {
         server: super::ServerPtrWeak,
         meta: super::ConnectionMeta,
         unauthorized: UnauthorizedID,
+        kcp: Option<crate::kcp_stream::KcpStream>,
     ) {
         let super::ConnectionMeta {
             control_permissions,
@@ -561,11 +594,17 @@ impl Connection {
 
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         let tx_cloned = tx.clone();
+        let media_channel = if kcp.is_some() && crate::media::stream_keys(&stream).is_some() {
+            kcp.as_ref().map(|kcp| kcp.media_channel())
+        } else {
+            Some(MediaChannel::new(false).0)
+        };
         let mut conn = Self {
             inner: ConnInner {
                 id,
                 tx: Some(tx),
                 tx_video: Some(tx_video),
+                media: media_channel.clone(),
             },
             require_2fa: crate::auth_2fa::get_2fa(None),
             awaiting_2fa: false,
@@ -573,6 +612,8 @@ impl Connection {
             // with the primary index returned with the refreshed display snapshot.
             display_idx: 0,
             stream,
+            kcp,
+            media_channel,
             server,
             hash,
             read_jobs: Vec::new(),
@@ -1072,6 +1113,25 @@ impl Connection {
                     }
                 }
                 Some((instant, value)) = rx_video.recv() => {
+                    let mut pending_control = None;
+                    let (instant, value) = if cfg!(feature = "low-latency-video")
+                        && matches!(&value.union, Some(message::Union::VideoFrame(_)))
+                    {
+                        let mut latest = (instant, value);
+                        while let Ok(next) = rx_video.try_recv() {
+                            if matches!(&next.1.union, Some(message::Union::VideoFrame(_))) {
+                                latest = next;
+                            } else {
+                                // Keep SwitchDisplay ordering intact. It is the only
+                                // non-video message routed through this queue.
+                                pending_control = Some(next);
+                                break;
+                            }
+                        }
+                        latest
+                    } else {
+                        (instant, value)
+                    };
                     if !conn.video_ack_required {
                         if let Some(message::Union::VideoFrame(vf)) = &value.union {
                             video_service::notify_video_frame_fetched(vf.display as usize, id, Some(instant.into()));
@@ -1080,6 +1140,12 @@ impl Connection {
                     if let Err(err) = conn.stream.send(&value as &Message).await {
                         conn.on_close(&err.to_string(), false).await;
                         break;
+                    }
+                    if let Some((_, control)) = pending_control {
+                        if let Err(err) = conn.stream.send(&control as &Message).await {
+                            conn.on_close(&err.to_string(), false).await;
+                            break;
+                        }
                     }
                 },
                 Some((instant, value)) = rx.recv() => {
@@ -1890,6 +1956,11 @@ impl Connection {
         }
         self.authorized = true;
         self.unauthorized_id = None;
+        if self.lr.low_latency_video {
+            if let Some(media) = self.media_channel.as_ref() {
+                media.set_enabled(true);
+            }
+        }
         // One-time means gone once it has let a peer in, not once that peer
         // leaves. This session's later logins come in on the password the
         // session remembers, so they are not affected.
@@ -2075,6 +2146,7 @@ impl Connection {
             privacy_mode: privacy_mode::is_privacy_mode_supported(),
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             terminal,
+            low_latency_video: self.lr.low_latency_video,
             ..Default::default()
         })
         .into();
@@ -2096,6 +2168,12 @@ impl Connection {
 
             pi.displays = camera::Cameras::all_info().unwrap_or(Vec::new());
             pi.current_display = camera::PRIMARY_CAMERA_IDX as _;
+            pi.features = Some(Features {
+                privacy_mode: privacy_mode::is_privacy_mode_supported(),
+                low_latency_video: self.lr.low_latency_video,
+                ..Default::default()
+            })
+            .into();
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             {
                 pi.resolutions = Some(SupportedResolutions {
@@ -2714,6 +2792,7 @@ impl Connection {
             hasher.update(bytes);
         };
         push(lr.my_id.as_bytes());
+        push(&[lr.low_latency_video as u8]);
         // Payloads are destructured exhaustively: a new field fails to compile until it is
         // either latched here or deliberately ignored.
         match lr.union.as_ref() {
@@ -2810,7 +2889,11 @@ impl Connection {
                 }
             }
         }
-        self.video_ack_required = lr.video_ack_required;
+        self.video_ack_required = if cfg!(feature = "low-latency-video") {
+            false
+        } else {
+            lr.video_ack_required
+        };
     }
 
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -5973,6 +6056,7 @@ impl Connection {
     fn is_view_camera_scoped_message(msg: &Message) -> bool {
         match msg.union.as_ref() {
             Some(message::Union::ScreenshotRequest(_)) => true,
+            Some(message::Union::MediaFrame(_)) => true,
             Some(message::Union::Misc(misc)) => Self::is_view_camera_scoped_misc(misc),
             // Legacy clients may send auto-login input during view-camera connect.
             // The handlers intentionally ignore these messages for view-camera sessions.
@@ -6101,6 +6185,7 @@ impl Connection {
             Some(message::Union::TerminalAction(_)) => "terminal_action",
             Some(message::Union::TerminalResponse(_)) => "terminal_response",
             Some(message::Union::PortForwardChannel(_)) => "port_forward_channel",
+            Some(message::Union::MediaFrame(_)) => "media_frame",
             Some(message::Union::Misc(misc)) => Self::misc_message_family(misc),
             Some(_) => "message.other",
             None => "empty",
@@ -7233,7 +7318,7 @@ mod test {
             let addr: SocketAddr = format!("192.0.2.{}:1", i + 1).parse().unwrap();
             let server = server.clone();
             handshakes.push(tokio::spawn(async move {
-                crate::server::create_tcp_connection(server, served, addr, true, Default::default())
+                crate::server::create_tcp_connection(server, served, addr, true, Default::default(), None)
                     .await
             }));
         }
@@ -7254,6 +7339,7 @@ mod test {
             addr,
             true,
             Default::default(),
+            None,
         )
         .await;
         assert!(refused.is_err());
@@ -7296,7 +7382,7 @@ mod test {
         let (mut controller, (accepted, addr)) = (controller.unwrap(), accepted.unwrap());
         let served = Stream::Tcp(hbb_common::tcp::FramedStream::from(accepted, addr));
         let handshake = tokio::spawn(async move {
-            crate::server::create_tcp_connection(server, served, addr, true, Default::default())
+            crate::server::create_tcp_connection(server, served, addr, true, Default::default(), None)
                 .await
         });
         let n = MAX_UNAUTHORIZED_MESSAGE + 1;

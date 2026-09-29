@@ -102,6 +102,7 @@ pub struct Remote<T: InvokeUiSession> {
     last_record_state: bool,
     sent_close_reason: bool,
     cursor_dedupe: CursorDedupe,
+    media_control: Option<Arc<crate::media::MediaChannel>>,
 }
 
 #[derive(Default)]
@@ -111,6 +112,7 @@ struct ParsedPeerInfo {
     idd_impl: String,
     support_view_camera: bool,
     support_terminal: bool,
+    low_latency_video: bool,
 }
 
 impl ParsedPeerInfo {
@@ -154,6 +156,7 @@ impl<T: InvokeUiSession> Remote<T> {
             last_record_state: false,
             sent_close_reason: false,
             cursor_dedupe: Default::default(),
+            media_control: None,
         }
     }
 
@@ -200,7 +203,7 @@ impl<T: InvokeUiSession> Remote<T> {
         )
         .await
         {
-            Ok(((mut peer, direct, pk, kcp, stream_type), (feedback, rendezvous_server))) => {
+            Ok(((mut peer, direct, pk, mut kcp, stream_type), (feedback, rendezvous_server))) => {
                 self.handler
                     .connection_round_state
                     .lock()
@@ -229,6 +232,19 @@ impl<T: InvokeUiSession> Remote<T> {
                     return;
                 }
                 self.handler.update_direct(Some(direct));
+                let mut media_receiver = None;
+                if cfg!(feature = "low-latency-video")
+                    && direct
+                    && kcp.is_some()
+                {
+                    if let Some((send, receive)) = crate::media::stream_keys(&peer) {
+                        if let Some(kcp_stream) = kcp.as_ref() {
+                            kcp_stream.set_media_keys(send, receive);
+                            self.media_control = Some(kcp_stream.media_channel());
+                        }
+                    }
+                    media_receiver = kcp.as_mut().and_then(|stream| stream.take_media_receiver());
+                }
                 if conn_type == ConnType::DEFAULT_CONN || conn_type == ConnType::VIEW_CAMERA {
                     self.handler
                         .set_fingerprint(crate::common::pk_to_fingerprint(pk.unwrap_or_default()));
@@ -270,7 +286,7 @@ impl<T: InvokeUiSession> Remote<T> {
                 let mut last_rx_progress = peer.rx_progress();
                 let mut peer_gone = false;
 
-                loop {
+                    loop {
                     tokio::select! {
                         res = peer.next() => {
                             if let Some(res) = res {
@@ -300,6 +316,20 @@ impl<T: InvokeUiSession> Remote<T> {
                                     self.handler.msgbox("error", "Connection Error", "Reset by the peer", "");
                                 }
                                 break;
+                            }
+                        }
+                        media = async {
+                            match &mut media_receiver {
+                                Some(receiver) => receiver.recv().await,
+                                None => std::future::pending().await,
+                            }
+                        } => {
+                            if let Some(bytes) = media {
+                                if !self.handle_media_bytes(&bytes, Some(&mut peer)).await {
+                                    break;
+                                }
+                            } else {
+                                media_receiver = None;
                             }
                         }
                         d = self.receiver.recv() => {
@@ -1388,9 +1418,13 @@ impl<T: InvokeUiSession> Remote<T> {
         });
         let custom_fps = self.handler.lc.read().unwrap().custom_fps.clone();
         let custom_fps = custom_fps.lock().unwrap().clone();
-        let mut custom_fps = custom_fps.unwrap_or(30);
+        let mut custom_fps = custom_fps.unwrap_or(if cfg!(feature = "low-latency-video") {
+            60
+        } else {
+            30
+        });
         if custom_fps < 5 || custom_fps > 120 {
-            custom_fps = 30;
+            custom_fps = if cfg!(feature = "low-latency-video") { 60 } else { 30 };
         }
         let inactive_threshold = 15;
         let max_queue_len = self
@@ -1524,40 +1558,74 @@ impl<T: InvokeUiSession> Remote<T> {
         return false;
     }
 
+    async fn handle_video_frame(&mut self, vf: VideoFrame, mut peer: Option<&mut Stream>) -> bool {
+        if !self.first_frame {
+            self.first_frame = true;
+            self.handler.close_success();
+            self.handler.adapt_size();
+            if let Some(peer) = peer.as_deref_mut() {
+                self.send_toggle_virtual_display_msg(peer).await;
+                self.send_toggle_privacy_mode_msg(peer).await;
+            }
+        }
+        self.video_format = CodecFormat::from(&vf);
+
+        let display = vf.display as usize;
+        if !self.video_threads.contains_key(&display) {
+            self.new_video_thread(display);
+        }
+        let Some(thread) = self.video_threads.get_mut(&display) else {
+            return true;
+        };
+        if Self::contains_key_frame(&vf) {
+            thread.video_sender.send(MediaData::VideoFrame(Box::new(vf))).ok();
+        } else {
+            let video_queue = thread.video_queue.read().unwrap();
+            if video_queue.force_push(vf).is_some() {
+                drop(video_queue);
+                self.handler.refresh_video(display as _);
+            } else {
+                thread.video_sender.send(MediaData::VideoQueue).ok();
+            }
+        }
+        true
+    }
+
+    async fn handle_media_bytes(
+        &mut self,
+        data: &[u8],
+        mut peer: Option<&mut Stream>,
+    ) -> bool {
+        let Ok(msg) = Message::parse_from_bytes(data) else {
+            return true;
+        };
+        match msg.union {
+            Some(message::Union::VideoFrame(vf)) => {
+                self.handle_video_frame(vf, peer.as_deref_mut()).await
+            }
+            Some(message::Union::MediaFrame(frame)) => {
+                let Ok(inner) = Message::parse_from_bytes(frame.data.as_ref()) else {
+                    return true;
+                };
+                match inner.union {
+                    Some(message::Union::VideoFrame(vf)) => {
+                        self.handle_video_frame(vf, peer.as_deref_mut()).await
+                    }
+                    _ => true,
+                }
+            }
+            _ => true,
+        }
+    }
+
     async fn handle_msg_from_peer(&mut self, data: &[u8], peer: &mut Stream) -> bool {
         if let Ok(msg_in) = Message::parse_from_bytes(&data) {
             match msg_in.union {
                 Some(message::Union::VideoFrame(vf)) => {
-                    if !self.first_frame {
-                        self.first_frame = true;
-                        self.handler.close_success();
-                        self.handler.adapt_size();
-                        self.send_toggle_virtual_display_msg(peer).await;
-                        self.send_toggle_privacy_mode_msg(peer).await;
-                    }
-                    self.video_format = CodecFormat::from(&vf);
-
-                    let display = vf.display as usize;
-                    if !self.video_threads.contains_key(&display) {
-                        self.new_video_thread(display);
-                    }
-                    let Some(thread) = self.video_threads.get_mut(&display) else {
-                        return true;
-                    };
-                    if Self::contains_key_frame(&vf) {
-                        thread
-                            .video_sender
-                            .send(MediaData::VideoFrame(Box::new(vf)))
-                            .ok();
-                    } else {
-                        let video_queue = thread.video_queue.read().unwrap();
-                        if video_queue.force_push(vf).is_some() {
-                            drop(video_queue);
-                            self.handler.refresh_video(display as _);
-                        } else {
-                            thread.video_sender.send(MediaData::VideoQueue).ok();
-                        }
-                    }
+                    return self.handle_video_frame(vf, Some(peer)).await;
+                }
+                Some(message::Union::MediaFrame(frame)) => {
+                    return self.handle_media_bytes(frame.data.as_ref(), Some(peer)).await;
                 }
                 Some(message::Union::Hash(hash)) => {
                     if !self
@@ -1582,6 +1650,11 @@ impl<T: InvokeUiSession> Remote<T> {
                         let peer_version = pi.version.clone();
                         let peer_platform = pi.platform.clone();
                         self.set_peer_info(&pi);
+                        if self.peer_info.low_latency_video {
+                            if let Some(media) = self.media_control.as_ref() {
+                                media.set_enabled(true);
+                            }
+                        }
                         if self.handler.is_view_camera() {
                             if !self.check_view_camera_support(&peer_version, &peer_platform) {
                                 self.handler.lc.write().unwrap().handle_peer_info(&pi);
@@ -2364,6 +2437,7 @@ impl<T: InvokeUiSession> Remote<T> {
         // Check features field for terminal support
         if let Some(features) = pi.features.as_ref() {
             self.peer_info.support_terminal = features.terminal;
+            self.peer_info.low_latency_video = features.low_latency_video;
         }
 
         if let Ok(platform_additions) =

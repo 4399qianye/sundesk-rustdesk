@@ -64,6 +64,8 @@ use std::{
 
 pub const OPTION_REFRESH: &'static str = "refresh";
 
+const LOW_LATENCY_WAIT_TIMEOUT_MS: u64 = 16;
+
 #[cfg(windows)]
 const DXGI_RECOVERY_LIMIT: usize = 3;
 #[cfg(windows)]
@@ -973,13 +975,20 @@ fn run(vs: VideoService) -> ResultType<()> {
         }
 
         let mut fetched_conn_ids = HashSet::new();
-        let timeout_millis = 3_000u64;
+        let timeout_millis = if cfg!(feature = "low-latency-video") {
+            LOW_LATENCY_WAIT_TIMEOUT_MS
+        } else {
+            3_000
+        };
         let wait_begin = Instant::now();
         while wait_begin.elapsed().as_millis() < timeout_millis as _ {
             if vs.source.is_monitor() {
                 check_privacy_mode_changed(&sp, display_idx, &c)?;
             }
-            frame_controller.try_wait_next(&mut fetched_conn_ids, 300);
+            frame_controller.try_wait_next(
+                &mut fetched_conn_ids,
+                if cfg!(feature = "low-latency-video") { 1 } else { 300 },
+            );
             // break if all connections have received current frame
             if fetched_conn_ids.len() >= frame_controller.send_conn_ids.len() {
                 break;
@@ -1078,7 +1087,13 @@ fn get_encoder_config(
     #[cfg(feature = "vram")]
     Encoder::update(scrap::codec::EncodingUpdate::Check);
     // https://www.wowza.com/community/t/the-correct-keyframe-interval-in-obs-studio/95162
-    let keyframe_interval = if record { Some(240) } else { None };
+    let keyframe_interval = if record {
+        Some(240)
+    } else if cfg!(feature = "low-latency-video") {
+        Some(120)
+    } else {
+        None
+    };
     let negotiated_codec = Encoder::negotiated_codec();
     match negotiated_codec {
         CodecFormat::H264 | CodecFormat::H265 => {

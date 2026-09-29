@@ -124,6 +124,8 @@ def make_parser():
         help='Enable feature hwcodec' + (
             '' if windows or osx else ', need libva-dev.')
     )
+    parser.add_argument('--low-latency-video', action='store_true',
+                        help='Enable the RustDesk low-latency video profile')
     parser.add_argument(
         '--vram',
         action='store_true',
@@ -316,6 +318,8 @@ def get_features(args):
     features = ['inline'] if not args.flutter else []
     if args.hwcodec:
         features.append('hwcodec')
+    if args.low_latency_video:
+        features.append('low-latency-video')
     if args.vram:
         features.append('vram')
     if args.flutter:

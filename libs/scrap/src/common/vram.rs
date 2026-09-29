@@ -73,7 +73,7 @@ impl EncoderApi for VRamEncoder {
                         width: config.width as _,
                         height: config.height as _,
                         kbitrate: bitrate as _,
-                        framerate: 30,
+                        framerate: if cfg!(feature = "low-latency-video") { 60 } else { 30 },
                         gop,
                     },
                 };

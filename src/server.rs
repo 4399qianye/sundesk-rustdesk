@@ -202,6 +202,7 @@ async fn accept_connection_(
             addr,
             secure,
             meta,
+            None,
         )
         .await?;
     }
@@ -214,6 +215,7 @@ pub async fn create_tcp_connection(
     addr: SocketAddr,
     secure: bool,
     meta: ConnectionMeta,
+    kcp: Option<crate::kcp_stream::KcpStream>,
 ) -> ResultType<()> {
     let mut stream = stream;
     // The address the connection layer keys on, whitelist and admission alike.
@@ -231,6 +233,11 @@ pub async fn create_tcp_connection(
         _ = unauthorized.evicted() => {
             bail!("evicted to make room for a newer unauthenticated connection");
         }
+    }
+    if let (Some(kcp), Some((send, receive))) =
+        (kcp.as_ref(), crate::media::stream_keys(&stream))
+    {
+        kcp.set_media_keys(send, receive);
     }
 
     #[cfg(target_os = "macos")]
@@ -252,6 +259,7 @@ pub async fn create_tcp_connection(
         Arc::downgrade(&server),
         meta,
         unauthorized,
+        kcp,
     )
     .await;
     Ok(())
@@ -415,7 +423,7 @@ async fn create_relay_connection_(
         ..Default::default()
     });
     stream.send(&msg_out).await?;
-    create_tcp_connection(server, stream, peer_addr, secure, meta).await?;
+    create_tcp_connection(server, stream, peer_addr, secure, meta, None).await?;
     Ok(())
 }
 

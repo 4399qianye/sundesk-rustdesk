@@ -84,6 +84,13 @@ message LoginRequest {
   string my_platform = 13;
   bytes hwid = 14;
   string avatar = 17;
+  bool low_latency_video = 18;
+}
+
+// Encoded video payload for the low-latency media protocol when the transport
+// does not expose a direct UDP socket (relay/WebRTC fallback).
+message MediaFrame {
+  bytes data = 1;
 }
 
 message Terminal {
@@ -101,6 +108,7 @@ message Features {
   bool privacy_mode = 1;
   bool terminal = 2;
   bool port_forward_mux = 3;
+  bool low_latency_video = 4;
 }
 
 message CodecAbility {
@@ -1030,5 +1038,6 @@ message Message {
     TerminalAction terminal_action = 31;
     TerminalResponse terminal_response = 32;
     PortForwardChannel port_forward_channel = 33;
+    MediaFrame media_frame = 34;
   }
 }

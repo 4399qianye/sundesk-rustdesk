@@ -1039,6 +1039,7 @@ impl RendezvousMediator {
                 peer_addr,
                 true,
                 meta,
+                None,
             )
             .await
             {
@@ -1406,6 +1407,7 @@ async fn direct_server(server: ServerPtr) {
                             addr,
                             false,
                             ConnectionMeta::default(), // Direct connections don't have server-side user context.
+                            None,
                         )
                         .await
                     );
@@ -1491,10 +1493,11 @@ async fn udp_nat_listen(
             init_packet,
         )
         .await?;
+        let (kcp, stream) = stream;
         // The KCP session is up: from here it is a connection like any other and the connection
         // layer's own limits apply to it, so the place goes back for the next punch.
         drop(slot);
-        crate::server::create_tcp_connection(server, stream.1, peer_addr_v4, true, meta).await?;
+        crate::server::create_tcp_connection(server, stream, peer_addr_v4, true, meta, Some(kcp)).await?;
         Ok(())
     };
     func.await.map_err(|e: anyhow::Error| {
@@ -1675,7 +1678,7 @@ async fn serve_punched(
 ) {
     log::info!("Punched tcp hole to {peer_addr}, connected on the punch itself");
     if let Err(err) =
-        crate::server::create_tcp_connection(server, stream, peer_addr, true, meta).await
+        crate::server::create_tcp_connection(server, stream, peer_addr, true, meta, None).await
     {
         log::warn!("Failed to serve the connection punched to {peer_addr}: {err}");
     }
@@ -1694,7 +1697,7 @@ async fn accept_punched_connection(
     match stream.local_addr() {
         Ok(stream_addr) => {
             let stream = Stream::from(stream, stream_addr);
-            if let Err(err) = create_tcp_connection(server, stream, addr, true, meta).await {
+            if let Err(err) = create_tcp_connection(server, stream, addr, true, meta, None).await {
                 log::warn!("Failed to serve the connection from {addr}: {err}");
             }
         }
