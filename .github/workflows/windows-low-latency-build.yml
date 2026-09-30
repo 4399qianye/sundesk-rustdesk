@@ -91,11 +91,24 @@ jobs:
           doNotCache: false
 
       - name: Install vcpkg dependencies
+        env:
+          VCPKG_DEFAULT_HOST_TRIPLET: x64-windows-static
         shell: bash
         run: |
           "$VCPKG_ROOT/vcpkg" install \
             --triplet x64-windows-static \
             --x-install-root="$VCPKG_ROOT/installed"
+
+      - name: Verify FFmpeg headers
+        shell: pwsh
+        run: |
+          $header = "$env:VCPKG_ROOT/installed/x64-windows-static/include/libavutil/pixfmt.h"
+          if (-not (Test-Path $header)) {
+            Get-ChildItem "$env:VCPKG_ROOT/installed" -Recurse -Filter pixfmt.h -ErrorAction SilentlyContinue |
+              Select-Object -ExpandProperty FullName
+            throw "FFmpeg header was not installed: $header"
+          }
+          Write-Host "Found $header"
 
       - name: Build Windows low-latency client
         shell: pwsh
