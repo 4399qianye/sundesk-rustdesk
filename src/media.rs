@@ -47,6 +47,7 @@ const LEGACY_FRAGMENT_SIZE: usize = 1050;
 const LEGACY_HEADER_LEN: usize = 4 + 1 + 8 + 2 + 2 + secretbox::NONCEBYTES;
 const NV_EXTRA_CODEC_H264: u8 = 0x80;
 const NV_EXTRA_CODEC_H265: u8 = 0x81;
+const GAMESTREAM_PLAINTEXT: u8 = 0x01;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Codec {
@@ -65,7 +66,7 @@ pub struct GameStreamFrame {
 }
 
 pub fn is_gamestream_packet(packet: &[u8]) -> bool {
-    packet.len() >= 64 + secretbox::MACBYTES
+    packet.len() >= 64
         && packet[0] & 0xc0 == 0x80
         && packet[0] & RTP_EXTENSION != 0
         && packet[1] == VIDEO_PAYLOAD_TYPE
@@ -93,6 +94,14 @@ pub fn packetize_gamestream(
     sequence: &mut u16,
     frame: &GameStreamFrame,
 ) -> Vec<Vec<u8>> {
+    packetize_gamestream_inner(Some(key), sequence, frame)
+}
+
+fn packetize_gamestream_inner(
+    key: Option<&secretbox::Key>,
+    sequence: &mut u16,
+    frame: &GameStreamFrame,
+) -> Vec<Vec<u8>> {
     let packet_count = frame.data.len().max(1).div_ceil(MEDIA_PAYLOAD_SIZE);
     if packet_count > 1023 {
         return Vec::new();
@@ -103,8 +112,10 @@ pub fn packetize_gamestream(
         let end = (start + MEDIA_PAYLOAD_SIZE).min(frame.data.len());
         let plaintext = &frame.data[start..end];
         let nonce = secretbox::gen_nonce();
-        let encrypted = secretbox::seal(plaintext, &nonce, key);
-        let mut packet = vec![0; 64 + encrypted.len()];
+        let payload = key
+            .map(|key| secretbox::seal(plaintext, &nonce, key))
+            .unwrap_or_else(|| plaintext.to_vec());
+        let mut packet = vec![0; 64 + payload.len()];
 
         packet[0] = 0x80 | RTP_EXTENSION;
         packet[1] = VIDEO_PAYLOAD_TYPE;
@@ -136,9 +147,11 @@ pub fn packetize_gamestream(
             Codec::H264 => NV_EXTRA_CODEC_H264,
             Codec::H265 => NV_EXTRA_CODEC_H265,
         };
-        packet[39] = 0;
-        packet[40..64].copy_from_slice(&nonce.0);
-        packet[64..].copy_from_slice(&encrypted);
+        packet[39] = if key.is_some() { 0 } else { GAMESTREAM_PLAINTEXT };
+        if key.is_some() {
+            packet[40..64].copy_from_slice(&nonce.0);
+        }
+        packet[64..].copy_from_slice(&payload);
         packets.push(packet);
         *sequence = sequence.wrapping_add(1);
     }
@@ -147,6 +160,23 @@ pub fn packetize_gamestream(
 
 pub fn packetize_message(
     key: &secretbox::Key,
+    sequence: &mut u16,
+    frame_index: &mut u32,
+    data: &[u8],
+) -> Option<Vec<Vec<u8>>> {
+    packetize_message_inner(Some(key), sequence, frame_index, data)
+}
+
+pub fn packetize_message_plain(
+    sequence: &mut u16,
+    frame_index: &mut u32,
+    data: &[u8],
+) -> Option<Vec<Vec<u8>>> {
+    packetize_message_inner(None, sequence, frame_index, data)
+}
+
+fn packetize_message_inner(
+    key: Option<&secretbox::Key>,
     sequence: &mut u16,
     frame_index: &mut u32,
     data: &[u8],
@@ -164,7 +194,7 @@ pub fn packetize_message(
     let mut packets = Vec::new();
     for frame in frames.frames.iter() {
         let timestamp = (frame.pts.max(0) as u64 * 90).min(u32::MAX as u64) as u32;
-        packets.extend(packetize_gamestream(
+        packets.extend(packetize_gamestream_inner(
             key,
             sequence,
             &GameStreamFrame {
@@ -308,8 +338,20 @@ impl Reassembler {
         packet: &[u8],
         key: &secretbox::Key,
     ) -> Option<GameStreamFrame> {
+        self.push_gamestream_inner(packet, Some(key))
+    }
+
+    pub fn push_gamestream_plain(&mut self, packet: &[u8]) -> Option<GameStreamFrame> {
+        self.push_gamestream_inner(packet, None)
+    }
+
+    fn push_gamestream_inner(
+        &mut self,
+        packet: &[u8],
+        key: Option<&secretbox::Key>,
+    ) -> Option<GameStreamFrame> {
         if !is_gamestream_packet(packet)
-            || packet.len() < PACKET_HEADER_LEN + secretbox::NONCEBYTES + secretbox::MACBYTES
+            || packet.len() < 64
         {
             return None;
         }
@@ -328,8 +370,13 @@ impl Reassembler {
         let display = u32::from_be_bytes(packet[8..12].try_into().ok()?)
             .saturating_sub(1) as i32;
         let fragment = (u32::from_le_bytes(packet[16..20].try_into().ok()?) >> 8) as usize;
-        let nonce = secretbox::Nonce::from_slice(&packet[40..64])?;
-        let data = secretbox::open(&packet[64..], &nonce, key).ok()?;
+        let data = if packet[39] & GAMESTREAM_PLAINTEXT != 0 {
+            packet[64..].to_vec()
+        } else {
+            let key = key?;
+            let nonce = secretbox::Nonce::from_slice(&packet[40..64])?;
+            secretbox::open(&packet[64..], &nonce, key).ok()?
+        };
 
         if self.frames.len() >= 8 && !self.frames.contains_key(&(frame_id as u64)) {
             if let Some(oldest) = self.frames.keys().min().copied() {
@@ -427,6 +474,23 @@ mod tests {
         for packet in packets {
             result = reassembler.push_legacy(&packet, &key).or(result);
         }
+        assert_eq!(result, Some(source));
+    }
+
+    #[test]
+    fn plaintext_gamestream_packet_roundtrip_preserves_frame() {
+        let source = GameStreamFrame {
+            frame_index: 7,
+            timestamp: 180_000,
+            display: 1,
+            key: false,
+            codec: Codec::H265,
+            data: Bytes::from_static(b"relay media"),
+        };
+        let mut sequence = 0;
+        let packets = packetize_gamestream_inner(None, &mut sequence, &source);
+        let mut reassembler = Reassembler::default();
+        let result = reassembler.push_gamestream_plain(&packets[0]);
         assert_eq!(result, Some(source));
     }
 }
