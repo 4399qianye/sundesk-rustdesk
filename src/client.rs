@@ -3890,6 +3890,10 @@ impl LoginConfigHandler {
             low_latency_video: cfg!(feature = "low-latency-video")
                 && (self.conn_type == ConnType::DEFAULT_CONN
                     || self.conn_type == ConnType::VIEW_CAMERA),
+            gamestream_video: cfg!(feature = "low-latency-video")
+                && cfg!(feature = "hwcodec")
+                && (self.conn_type == ConnType::DEFAULT_CONN
+                    || self.conn_type == ConnType::VIEW_CAMERA),
             ..Default::default()
         };
         match self.conn_type {

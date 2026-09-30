@@ -91,6 +91,7 @@ impl KcpStream {
         Self::kcp_io(
             udp_socket.clone(), input, output, stop_receiver, media_watch, media_tx,
             media_keys.clone(),
+            media.clone(),
         )
         .await;
 
@@ -133,6 +134,7 @@ impl KcpStream {
         Self::kcp_io(
             udp_socket.clone(), input, output, stop_receiver, media_watch, media_tx,
             media_keys.clone(),
+            media.clone(),
         )
         .await;
 
@@ -162,11 +164,13 @@ impl KcpStream {
         mut media_receiver: hbb_common::tokio::sync::watch::Receiver<Bytes>,
         media_in_sender: mpsc::Sender<Bytes>,
         media_keys: Arc<std::sync::Mutex<Option<(secretbox::Key, secretbox::Key)>>>,
+        media_channel: Arc<MediaChannel>,
     ) {
         let udp = udp_socket.clone();
         tokio::spawn(async move {
             let mut buf = vec![0; 1500];
-            let mut media_frame_id = 0u64;
+            let mut media_frame_id = 0u32;
+            let mut media_sequence = 0u16;
             let mut reassembler = Reassembler::default();
             // Socket errors are ICMP unreachable on a connected UDP socket — advisory, and
             // routine while a hole forms — so treat them as loss and let KCP's pong timeout reap
@@ -201,24 +205,45 @@ impl KcpStream {
                         let Some(key) = key else {
                             continue;
                         };
-                        for packet in media::packetize(&key, media_frame_id, &data) {
+                        let packets = if media_channel.is_gamestream() {
+                            media::packetize_message(
+                                &key,
+                                &mut media_sequence,
+                                &mut media_frame_id,
+                                &data,
+                            )
+                            .unwrap_or_default()
+                        } else {
+                            media::packetize_legacy(&key, media_frame_id as u64, &data)
+                        };
+                        media_frame_id = media_frame_id.wrapping_add(1);
+                        for packet in packets {
                             if udp.send(&packet).await.is_err() {
                                 break;
                             }
                         }
-                        media_frame_id = media_frame_id.wrapping_add(1);
                     }
                     result = udp.recv_from(&mut buf) => {
                         match result {
                             Ok((size, _)) => {
-                                if size >= media::HEADER_LEN && &buf[..4] == media::MAGIC {
+                                let is_gamestream = media::is_gamestream_packet(&buf[..size]);
+                                let is_legacy = media::is_legacy_packet(&buf[..size]);
+                                if is_gamestream || is_legacy {
                                     let key = media_keys
                                         .lock()
                                         .ok()
                                         .and_then(|keys| keys.as_ref().map(|keys| keys.1.clone()));
                                     if let Some(key) = key {
-                                        if let Some(frame) = reassembler.push(&buf[..size], &key) {
-                                            media_in_sender.try_send(frame).ok();
+                                        if is_gamestream {
+                                            if let Some(frame) = reassembler.push_gamestream(&buf[..size], &key) {
+                                                if let Some(data) = media::encode_gamestream_frame(&frame) {
+                                                    media_in_sender.try_send(data).ok();
+                                                }
+                                            }
+                                        } else if let Some(data) =
+                                            reassembler.push_legacy(&buf[..size], &key)
+                                        {
+                                            media_in_sender.try_send(data).ok();
                                         }
                                     }
                                     continue;
