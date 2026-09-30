@@ -113,6 +113,7 @@ struct ParsedPeerInfo {
     support_view_camera: bool,
     support_terminal: bool,
     low_latency_video: bool,
+    gamestream_video: bool,
 }
 
 impl ParsedPeerInfo {
@@ -1652,6 +1653,7 @@ impl<T: InvokeUiSession> Remote<T> {
                         self.set_peer_info(&pi);
                         if self.peer_info.low_latency_video {
                             if let Some(media) = self.media_control.as_ref() {
+                                media.set_gamestream(self.peer_info.gamestream_video);
                                 media.set_enabled(true);
                             }
                         }
@@ -2438,6 +2440,7 @@ impl<T: InvokeUiSession> Remote<T> {
         if let Some(features) = pi.features.as_ref() {
             self.peer_info.support_terminal = features.terminal;
             self.peer_info.low_latency_video = features.low_latency_video;
+            self.peer_info.gamestream_video = features.gamestream_video;
         }
 
         if let Ok(platform_additions) =

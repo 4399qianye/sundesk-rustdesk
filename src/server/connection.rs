@@ -1958,6 +1958,7 @@ impl Connection {
         self.unauthorized_id = None;
         if self.lr.low_latency_video {
             if let Some(media) = self.media_channel.as_ref() {
+                media.set_gamestream(self.lr.gamestream_video);
                 media.set_enabled(true);
             }
         }
@@ -2147,6 +2148,7 @@ impl Connection {
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             terminal,
             low_latency_video: self.lr.low_latency_video,
+            gamestream_video: self.lr.gamestream_video,
             ..Default::default()
         })
         .into();
@@ -2171,6 +2173,7 @@ impl Connection {
             pi.features = Some(Features {
                 privacy_mode: privacy_mode::is_privacy_mode_supported(),
                 low_latency_video: self.lr.low_latency_video,
+                gamestream_video: self.lr.gamestream_video,
                 ..Default::default()
             })
             .into();

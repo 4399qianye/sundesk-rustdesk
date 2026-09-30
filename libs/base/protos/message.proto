@@ -85,6 +85,7 @@ message LoginRequest {
   bytes hwid = 14;
   string avatar = 17;
   bool low_latency_video = 18;
+  bool gamestream_video = 19;
 }
 
 // Encoded video payload for the low-latency media protocol when the transport
@@ -109,6 +110,7 @@ message Features {
   bool terminal = 2;
   bool port_forward_mux = 3;
   bool low_latency_video = 4;
+  bool gamestream_video = 5;
 }
 
 message CodecAbility {
