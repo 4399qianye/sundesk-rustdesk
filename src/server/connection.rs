@@ -245,6 +245,8 @@ pub struct ConnInner {
     tx: Option<Sender>,
     tx_video: Option<Sender>,
     media: Option<Arc<MediaChannel>>,
+    media_sequence: u16,
+    media_frame_index: u32,
 }
 
 struct InputMouse {
@@ -471,7 +473,14 @@ pub struct Connection {
 
 impl ConnInner {
     pub fn new(id: i32, tx: Option<Sender>, tx_video: Option<Sender>) -> Self {
-        Self { id, tx, tx_video, media: None }
+        Self {
+            id,
+            tx,
+            tx_video,
+            media: None,
+            media_sequence: 0,
+            media_frame_index: 0,
+        }
     }
 
 }
@@ -491,6 +500,32 @@ impl Subscriber for ConnInner {
                 if let Ok(bytes) = msg.write_to_bytes() {
                     if media.is_raw() {
                         media.send(bytes.into());
+                    } else if media.is_gamestream() {
+                        if let Some(packets) = crate::media::packetize_message_plain(
+                            &mut self.media_sequence,
+                            &mut self.media_frame_index,
+                            &bytes,
+                        ) {
+                            for packet in packets {
+                                let mut media_msg = Message::new();
+                                media_msg.set_media_frame(MediaFrame {
+                                    data: packet.into(),
+                                    ..Default::default()
+                                });
+                                self.tx_video.as_mut().map(|tx| {
+                                    allow_err!(tx.send((Instant::now(), Arc::new(media_msg))));
+                                });
+                            }
+                        } else {
+                            let mut media_msg = Message::new();
+                            media_msg.set_media_frame(MediaFrame {
+                                data: bytes.into(),
+                                ..Default::default()
+                            });
+                            self.tx_video.as_mut().map(|tx| {
+                                allow_err!(tx.send((Instant::now(), Arc::new(media_msg))));
+                            });
+                        }
                     } else {
                         let mut media_msg = Message::new();
                         media_msg.set_media_frame(MediaFrame {
@@ -605,6 +640,8 @@ impl Connection {
                 tx: Some(tx),
                 tx_video: Some(tx_video),
                 media: media_channel.clone(),
+                media_sequence: 0,
+                media_frame_index: 0,
             },
             require_2fa: crate::auth_2fa::get_2fa(None),
             awaiting_2fa: false,

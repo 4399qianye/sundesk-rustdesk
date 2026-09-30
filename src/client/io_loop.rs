@@ -103,6 +103,7 @@ pub struct Remote<T: InvokeUiSession> {
     sent_close_reason: bool,
     cursor_dedupe: CursorDedupe,
     media_control: Option<Arc<crate::media::MediaChannel>>,
+    media_reassembler: crate::media::Reassembler,
 }
 
 #[derive(Default)]
@@ -158,6 +159,7 @@ impl<T: InvokeUiSession> Remote<T> {
             sent_close_reason: false,
             cursor_dedupe: Default::default(),
             media_control: None,
+            media_reassembler: Default::default(),
         }
     }
 
@@ -1605,6 +1607,19 @@ impl<T: InvokeUiSession> Remote<T> {
                 self.handle_video_frame(vf, peer.as_deref_mut()).await
             }
             Some(message::Union::MediaFrame(frame)) => {
+                if self.peer_info.gamestream_video
+                    && crate::media::is_gamestream_packet(frame.data.as_ref())
+                {
+                    if let Some(game_frame) = self
+                        .media_reassembler
+                        .push_gamestream_plain(frame.data.as_ref())
+                    {
+                        if let Some(inner) = crate::media::encode_gamestream_frame(&game_frame) {
+                            return self.handle_media_bytes(inner.as_ref(), peer.as_deref_mut()).await;
+                        }
+                    }
+                    return true;
+                }
                 let Ok(inner) = Message::parse_from_bytes(frame.data.as_ref()) else {
                     return true;
                 };
