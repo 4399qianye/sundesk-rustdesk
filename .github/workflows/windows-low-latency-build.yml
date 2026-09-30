@@ -1,0 +1,114 @@
+name: Windows Low Latency Build
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - master
+    paths:
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - "build.py"
+      - "libs/base/protos/**"
+      - "libs/scrap/**"
+      - "src/**"
+      - "flutter/**"
+      - ".github/workflows/windows-low-latency-build.yml"
+
+env:
+  SCITER_RUST_VERSION: "1.75"
+  RUST_VERSION: "1.75"
+  LLVM_VERSION: "15.0.6"
+  FLUTTER_VERSION: "3.24.5"
+  VCPKG_COMMIT_ID: "9e593bb18ea69cc5095e012465dcd675a822ed0d"
+  VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+
+jobs:
+  generate-bridge:
+    uses: ./.github/workflows/bridge.yml
+
+  build-windows-x64:
+    name: Windows x64 Flutter low-latency build
+    needs: generate-bridge
+    runs-on: windows-2022
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Restore Flutter bridge
+        uses: actions/download-artifact@v4
+        with:
+          name: bridge-artifact
+          path: ./
+
+      - name: Install LLVM and Clang
+        uses: KyleMayes/install-llvm-action@v2
+        with:
+          version: ${{ env.LLVM_VERSION }}
+
+      - name: Install Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: stable
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          architecture: x64
+
+      - name: Patch Flutter 3.24 dropdown menu
+        shell: bash
+        run: |
+          cp .github/patches/flutter_3.24.4_dropdown_menu_enableFilter.diff \
+            "$(dirname "$(dirname "$(which flutter)")")"
+          cd "$(dirname "$(dirname "$(which flutter)")")"
+          git apply flutter_3.24.4_dropdown_menu_enableFilter.diff
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets: x86_64-pc-windows-msvc
+          components: rustfmt
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: windows-x64-low-latency
+
+      - name: Setup vcpkg
+        uses: lukka/run-vcpkg@v11
+        with:
+          vcpkgDirectory: C:\vcpkg
+          vcpkgGitCommitId: ${{ env.VCPKG_COMMIT_ID }}
+          doNotCache: false
+
+      - name: Install vcpkg dependencies
+        shell: bash
+        run: |
+          "$VCPKG_ROOT/vcpkg" install \
+            --triplet x64-windows-static \
+            --x-install-root="$VCPKG_ROOT/installed"
+
+      - name: Build Windows low-latency client
+        shell: pwsh
+        run: |
+          python build.py --portable --hwcodec --flutter --vram --low-latency-video --skip-portable-pack
+
+      - name: Verify binary
+        shell: pwsh
+        run: |
+          $binary = "flutter/build/windows/x64/runner/Release/rustdesk.exe"
+          if (-not (Test-Path $binary)) {
+            throw "Expected Windows binary was not produced: $binary"
+          }
+          Get-Item $binary | Format-List FullName,Length,LastWriteTime
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: rustdesk-windows-x64-low-latency
+          path: flutter/build/windows/x64/runner/Release
+          if-no-files-found: error
