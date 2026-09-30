@@ -206,13 +206,23 @@ impl KcpStream {
                             continue;
                         };
                         let packets = if media_channel.is_gamestream() {
-                            media::packetize_message(
+                            match media::packetize_message(
                                 &key,
                                 &mut media_sequence,
                                 &mut media_frame_id,
                                 &data,
-                            )
-                            .unwrap_or_default()
+                            ) {
+                                Some(packets) if !packets.is_empty() => packets,
+                                _ => {
+                                    let packets = media::packetize_legacy(
+                                        &key,
+                                        media_frame_id as u64,
+                                        &data,
+                                    );
+                                    media_frame_id = media_frame_id.wrapping_add(1);
+                                    packets
+                                }
+                            }
                         } else {
                             let packets = media::packetize_legacy(&key, media_frame_id as u64, &data);
                             media_frame_id = media_frame_id.wrapping_add(1);
