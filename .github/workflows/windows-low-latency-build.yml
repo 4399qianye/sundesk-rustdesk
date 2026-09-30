@@ -24,12 +24,8 @@ env:
   VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
 
 jobs:
-  generate-bridge:
-    uses: ./.github/workflows/bridge.yml
-
   build-windows-x64:
     name: Windows x64 Flutter low-latency build
-    needs: generate-bridge
     runs-on: windows-2022
     permissions:
       contents: read
@@ -39,12 +35,6 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
-
-      - name: Restore Flutter bridge
-        uses: actions/download-artifact@v4
-        with:
-          name: bridge-artifact
-          path: ./
 
       - name: Install LLVM and Clang
         uses: KyleMayes/install-llvm-action@v2
@@ -73,6 +63,21 @@ jobs:
           targets: x86_64-pc-windows-msvc
           components: rustfmt
 
+      - name: Generate Flutter Rust bridge
+        shell: pwsh
+        run: |
+          cargo install cargo-expand --version 1.0.95 --locked
+          cargo install flutter_rust_bridge_codegen --version 1.80.1 --features uuid --locked
+          Push-Location flutter
+          flutter pub get
+          Pop-Location
+          $codegen = Join-Path $env:CARGO_HOME "bin\flutter_rust_bridge_codegen.exe"
+          & $codegen `
+            --rust-input ./src/flutter_ffi.rs `
+            --dart-output ./flutter/lib/generated_bridge.dart `
+            --c-output ./flutter/macos/Runner/bridge_generated.h
+          Copy-Item ./flutter/macos/Runner/bridge_generated.h ./flutter/ios/Runner/bridge_generated.h -Force
+
       - name: Cache Rust dependencies
         uses: Swatinem/rust-cache@v2
         with:
@@ -95,7 +100,16 @@ jobs:
       - name: Build Windows low-latency client
         shell: pwsh
         run: |
-          python build.py --portable --hwcodec --flutter --vram --low-latency-video --skip-portable-pack
+          $attempts = 3
+          for ($attempt = 1; $attempt -le $attempts; $attempt++) {
+            python build.py --portable --hwcodec --flutter --vram --low-latency-video --skip-portable-pack
+            if ($LASTEXITCODE -eq 0) { exit 0 }
+            if ($attempt -lt $attempts) {
+              Write-Host "Cargo build failed; retrying in 20 seconds ($attempt/$attempts)."
+              Start-Sleep -Seconds 20
+            }
+          }
+          exit 1
 
       - name: Verify binary
         shell: pwsh
