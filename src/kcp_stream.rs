@@ -214,9 +214,10 @@ impl KcpStream {
                             )
                             .unwrap_or_default()
                         } else {
-                            media::packetize_legacy(&key, media_frame_id as u64, &data)
+                            let packets = media::packetize_legacy(&key, media_frame_id as u64, &data);
+                            media_frame_id = media_frame_id.wrapping_add(1);
+                            packets
                         };
-                        media_frame_id = media_frame_id.wrapping_add(1);
                         for packet in packets {
                             if udp.send(&packet).await.is_err() {
                                 break;

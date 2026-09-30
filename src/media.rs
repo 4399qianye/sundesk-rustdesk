@@ -94,6 +94,9 @@ pub fn packetize_gamestream(
     frame: &GameStreamFrame,
 ) -> Vec<Vec<u8>> {
     let packet_count = frame.data.len().max(1).div_ceil(MEDIA_PAYLOAD_SIZE);
+    if packet_count > 1023 {
+        return Vec::new();
+    }
     let mut packets = Vec::with_capacity(packet_count);
     for index in 0..packet_count {
         let start = index * MEDIA_PAYLOAD_SIZE;
@@ -112,7 +115,7 @@ pub fn packetize_gamestream(
         // Two extension words, matching the 4-byte reserved area followed by
         // the GameStream NV_VIDEO_PACKET fields.
         put_le32(&mut packet[12..16], 0);
-        put_le32(&mut packet[16..20], (index as u32) << 8);
+        put_le32(&mut packet[16..20], (*sequence as u32) << 8);
         put_le32(&mut packet[20..24], frame.frame_index);
         packet[24] = FRAME_FLAG_PICTURE
             | if index == 0 { FRAME_FLAG_SOF } else { 0 }
