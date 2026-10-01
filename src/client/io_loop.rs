@@ -1615,7 +1615,13 @@ impl<T: InvokeUiSession> Remote<T> {
                         .push_gamestream_plain(frame.data.as_ref())
                     {
                         if let Some(inner) = crate::media::encode_gamestream_frame(&game_frame) {
-                            return self.handle_media_bytes(inner.as_ref(), peer.as_deref_mut()).await;
+                            if let Ok(message) = Message::parse_from_bytes(&inner) {
+                                if let Some(message::Union::VideoFrame(video)) = message.union {
+                                    return self
+                                        .handle_video_frame(video, peer.as_deref_mut())
+                                        .await;
+                                }
+                            }
                         }
                     }
                     return true;
