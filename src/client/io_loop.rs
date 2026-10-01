@@ -1446,7 +1446,9 @@ impl<T: InvokeUiSession> Remote<T> {
         let Some(min_decode_fps) = min_decode_fps else {
             return;
         };
-        let mut limited_fps = if direct {
+        let mut limited_fps = if cfg!(feature = "low-latency-video") {
+            min_decode_fps
+        } else if direct {
             min_decode_fps * 9 / 10 // 30 got 27
         } else {
             min_decode_fps * 4 / 5 // 30 got 24
