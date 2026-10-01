@@ -6,6 +6,7 @@ use hbb_common::{
     tokio::sync::watch,
 };
 use base::message_proto::{message, video_frame, Message};
+use base::message_proto::{key_event, KeyEvent, MouseEvent};
 
 pub fn stream_keys(stream: &Stream) -> Option<(secretbox::Key, secretbox::Key)> {
     match stream {
@@ -77,6 +78,113 @@ pub fn open_input(key: &secretbox::Key, packet: &[u8]) -> Option<Bytes> {
     secretbox::open(&packet[INPUT_HEADER_LEN..], &nonce, key)
         .ok()
         .map(Bytes::from)
+}
+
+const INPUT_KEY_DOWN: u32 = 0x00000003;
+const INPUT_KEY_UP: u32 = 0x00000004;
+const INPUT_MOUSE_ABS: u32 = 0x00000005;
+const INPUT_MOUSE_REL: u32 = 0x00000007;
+const INPUT_MOUSE_BUTTON_DOWN: u32 = 0x00000008;
+const INPUT_MOUSE_BUTTON_UP: u32 = 0x00000009;
+const INPUT_SCROLL: u32 = 0x0000000A;
+
+fn put_be_i16(dst: &mut Vec<u8>, value: i32) {
+    dst.extend_from_slice(&(value.clamp(i16::MIN as i32, i16::MAX as i32) as i16).to_be_bytes());
+}
+
+fn input_header(magic: u32, payload_len: usize, out: &mut Vec<u8>) {
+    out.extend_from_slice(&((payload_len + 4) as u32).to_be_bytes());
+    out.extend_from_slice(&magic.to_le_bytes());
+}
+
+pub fn encode_sunshine_input(message: &Message) -> Option<Bytes> {
+    let mut packet = Vec::new();
+    match message.union.as_ref()? {
+        message::Union::MouseEvent(mouse) => {
+            let kind = mouse.mask & 7;
+            if kind == 3 {
+                input_header(INPUT_SCROLL, 6, &mut packet);
+                put_be_i16(&mut packet, mouse.y);
+                put_be_i16(&mut packet, 0);
+                packet.extend_from_slice(&0i16.to_be_bytes());
+            } else if kind == 1 || kind == 2 {
+                let button = ((mouse.mask >> 3) & 0xFF) as u8;
+                input_header(
+                    if kind == 1 { INPUT_MOUSE_BUTTON_DOWN } else { INPUT_MOUSE_BUTTON_UP },
+                    1,
+                    &mut packet,
+                );
+                packet.push(button);
+            } else {
+                input_header(INPUT_MOUSE_REL, 4, &mut packet);
+                put_be_i16(&mut packet, mouse.x);
+                put_be_i16(&mut packet, mouse.y);
+            }
+        }
+        message::Union::KeyEvent(key) => {
+            let (code, unicode) = match key.union.as_ref()? {
+                key_event::Union::Chr(code) => (*code as u16, false),
+                key_event::Union::ControlKey(control) => (*control as u16, false),
+                key_event::Union::Unicode(code) => (*code as u16, true),
+                _ => return None,
+            };
+            if unicode {
+                return None;
+            }
+            input_header(if key.down || key.press { INPUT_KEY_DOWN } else { INPUT_KEY_UP }, 6, &mut packet);
+            packet.push(0);
+            packet.extend_from_slice(&code.to_be_bytes());
+            packet.push(0);
+            packet.extend_from_slice(&0i16.to_be_bytes());
+        }
+        _ => return None,
+    }
+    Some(Bytes::from(packet))
+}
+
+pub fn decode_sunshine_input(packet: &[u8]) -> Option<Message> {
+    if packet.len() < 8 {
+        return None;
+    }
+    let size = u32::from_be_bytes(packet[..4].try_into().ok()?) as usize;
+    let magic = u32::from_le_bytes(packet[4..8].try_into().ok()?);
+    if size + 4 != packet.len() {
+        return None;
+    }
+    let payload = &packet[8..];
+    let mut message = Message::new();
+    match magic {
+        INPUT_MOUSE_REL if payload.len() >= 4 => {
+            let x = i16::from_be_bytes(payload[..2].try_into().ok()?) as i32;
+            let y = i16::from_be_bytes(payload[2..4].try_into().ok()?) as i32;
+            message.set_mouse_event(MouseEvent { x, y, ..Default::default() });
+        }
+        INPUT_MOUSE_BUTTON_DOWN | INPUT_MOUSE_BUTTON_UP if !payload.is_empty() => {
+            let button = payload[0] as i32;
+            let kind = if magic == INPUT_MOUSE_BUTTON_DOWN { 1 } else { 2 };
+            message.set_mouse_event(MouseEvent {
+                mask: (button << 3) | kind,
+                ..Default::default()
+            });
+        }
+        INPUT_SCROLL if payload.len() >= 2 => {
+            let amount = i16::from_be_bytes(payload[..2].try_into().ok()?) as i32;
+            message.set_mouse_event(MouseEvent {
+                mask: 3,
+                y: amount,
+                ..Default::default()
+            });
+        }
+        INPUT_KEY_DOWN | INPUT_KEY_UP if payload.len() >= 5 => {
+            let code = u16::from_be_bytes(payload[1..3].try_into().ok()?) as u32;
+            let mut key = KeyEvent::new();
+            key.down = magic == INPUT_KEY_DOWN;
+            key.set_chr(code);
+            message.set_key_event(key);
+        }
+        _ => return None,
+    }
+    Some(message)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -524,5 +632,21 @@ mod tests {
         let mut reassembler = Reassembler::default();
         let result = reassembler.push_gamestream_plain(&packets[0]);
         assert_eq!(result, Some(source));
+    }
+
+    #[test]
+    fn sunshine_input_roundtrip_preserves_relative_mouse() {
+        let mut message = Message::new();
+        message.set_mouse_event(MouseEvent {
+            x: 12,
+            y: -7,
+            ..Default::default()
+        });
+        let packet = encode_sunshine_input(&message).unwrap();
+        let decoded = decode_sunshine_input(&packet).unwrap();
+        let Some(message::Union::MouseEvent(mouse)) = decoded.union else {
+            panic!("expected mouse event");
+        };
+        assert_eq!((mouse.x, mouse.y), (12, -7));
     }
 }

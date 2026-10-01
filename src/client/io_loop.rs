@@ -804,16 +804,21 @@ impl<T: InvokeUiSession> Remote<T> {
                         .as_ref()
                         .is_some_and(|media| media.is_gamestream())
                     && matches!(
-                        msg.union,
+                        msg.union.as_ref(),
                         Some(message::Union::MouseEvent(_))
                             | Some(message::Union::PointerDeviceEvent(_))
                             | Some(message::Union::KeyEvent(_))
                     )
                 {
                     if let Some(kcp) = kcp {
-                        if let Ok(bytes) = msg.write_to_bytes() {
-                            if kcp.send_input(bytes.into()) {
-                                return true;
+                        if !matches!(
+                            msg.union.as_ref(),
+                            Some(message::Union::KeyEvent(key)) if key.press
+                        ) {
+                            if let Some(bytes) = crate::media::encode_sunshine_input(&msg) {
+                                if kcp.send_input(bytes) {
+                                    return true;
+                                }
                             }
                         }
                     }

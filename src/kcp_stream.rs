@@ -3,6 +3,7 @@ use hbb_common::{
     bytes::{Bytes, BytesMut},
     bytes_codec::BytesCodec,
     config, log,
+    protobuf::Message as _,
     sodiumoxide::crypto::secretbox,
     tcp::{DynTcpStream, FramedStream},
     tokio::{self, net::UdpSocket, sync::mpsc, sync::oneshot},
@@ -268,7 +269,11 @@ impl KcpStream {
                                     .and_then(|keys| keys.as_ref().map(|keys| keys.1.clone()))
                                 {
                                     if let Some(input) = media::open_input(&key, &buf[..size]) {
-                                        input_in_sender.try_send(input).ok();
+                                        if let Some(message) = media::decode_sunshine_input(&input) {
+                                            if let Ok(bytes) = message.write_to_bytes() {
+                                                input_in_sender.try_send(bytes.into()).ok();
+                                            }
+                                        }
                                         continue;
                                     }
                                 }
