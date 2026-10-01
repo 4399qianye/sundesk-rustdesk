@@ -126,7 +126,9 @@ fn packetize_gamestream_inner(
         // Two extension words, matching the 4-byte reserved area followed by
         // the GameStream NV_VIDEO_PACKET fields.
         put_le32(&mut packet[12..16], 0);
-        put_le32(&mut packet[16..20], (*sequence as u32) << 8);
+        // streamPacketIndex is frame-local in the GameStream depacketizer;
+        // RTP sequence remains the global packet ordering field.
+        put_le32(&mut packet[16..20], (index as u32) << 8);
         put_le32(&mut packet[20..24], frame.frame_index);
         packet[24] = FRAME_FLAG_PICTURE
             | if index == 0 { FRAME_FLAG_SOF } else { 0 }
