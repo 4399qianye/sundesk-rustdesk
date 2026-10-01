@@ -197,6 +197,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Please enter the folder name", ""),
         ("Fix it", ""),
         ("Warning", ""),
+        ("Low latency video mode is not enabled", ""),
         ("Login screen using Wayland is not supported", ""),
         ("Reboot required", ""),
         ("Unsupported display server", ""),

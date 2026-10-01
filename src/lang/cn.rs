@@ -197,6 +197,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Please enter the folder name", "请输入文件夹名称"),
         ("Fix it", "修复"),
         ("Warning", "警告"),
+        ("Low latency video mode is not enabled", "低延迟视频模式未启用，当前连接使用标准视频路径。"),
         ("Login screen using Wayland is not supported", "不支持使用 Wayland 登录界面"),
         ("Reboot required", "重启后才能生效"),
         ("Unsupported display server", "不支持当前显示服务器"),

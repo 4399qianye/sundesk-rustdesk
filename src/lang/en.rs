@@ -18,6 +18,7 @@ pub static ref T: std::collections::HashMap<&'static str, &'static str> =
         ("Password Required", "Password required"),
         ("Wrong Password", "Wrong password"),
         ("Connection Error", "Connection error"),
+        ("Low latency video mode is not enabled", "Low latency video mode is not enabled. The connection is using the standard video path."),
         ("Login Error", "Login error"),
         ("Show Hidden Files", "Show hidden files"),
         ("Refresh File", "Refresh file"),

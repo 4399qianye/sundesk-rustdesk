@@ -104,6 +104,7 @@ pub struct Remote<T: InvokeUiSession> {
     cursor_dedupe: CursorDedupe,
     media_control: Option<Arc<crate::media::MediaChannel>>,
     media_reassembler: crate::media::Reassembler,
+    low_latency_warning_shown: bool,
 }
 
 #[derive(Default)]
@@ -160,6 +161,7 @@ impl<T: InvokeUiSession> Remote<T> {
             cursor_dedupe: Default::default(),
             media_control: None,
             media_reassembler: Default::default(),
+            low_latency_warning_shown: false,
         }
     }
 
@@ -1693,6 +1695,19 @@ impl<T: InvokeUiSession> Remote<T> {
                         let peer_version = pi.version.clone();
                         let peer_platform = pi.platform.clone();
                         self.set_peer_info(&pi);
+                        if !self.low_latency_warning_shown
+                            && (self.handler.is_default() || self.handler.is_view_camera())
+                            && (!cfg!(feature = "low-latency-video")
+                                || !self.peer_info.low_latency_video)
+                        {
+                            self.low_latency_warning_shown = true;
+                            self.handler.msgbox(
+                                "custom-nocancel",
+                                "Warning",
+                                "Low latency video mode is not enabled",
+                                "",
+                            );
+                        }
                         if self.peer_info.low_latency_video {
                             if let Some(media) = self.media_control.as_ref() {
                                 media.set_gamestream(self.peer_info.gamestream_video);
