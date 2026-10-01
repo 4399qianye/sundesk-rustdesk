@@ -124,7 +124,9 @@ pub fn encode_sunshine_input(message: &Message) -> Option<Bytes> {
         message::Union::KeyEvent(key) => {
             let (code, unicode) = match key.union.as_ref()? {
                 key_event::Union::Chr(code) => (*code as u16, false),
-                key_event::Union::ControlKey(control) => (*control as u16, false),
+                key_event::Union::ControlKey(control) => {
+                    (control.enum_value_or_default() as u16, false)
+                }
                 key_event::Union::Unicode(code) => (*code as u16, true),
                 _ => return None,
             };
