@@ -1310,7 +1310,14 @@ pub fn set_user_default_option(key: String, value: String) {
 #[cfg(feature = "flutter")]
 pub fn get_user_default_option(key: String) -> String {
     use hbb_common::config::UserDefaultConfig;
-    UserDefaultConfig::load().get(&key)
+    let value = UserDefaultConfig::load().get(&key);
+    if cfg!(feature = "low-latency-video") && key == "custom-fps" && (value == "30" || value == "120") {
+        // Older defaults and the shared config parser cap this legacy value below the
+        // high-refresh low-latency default. The session-level option still accepts 144.
+        "144".to_owned()
+    } else {
+        value
+    }
 }
 
 pub fn get_fingerprint() -> String {

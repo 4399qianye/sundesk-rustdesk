@@ -498,9 +498,9 @@ impl<T: InvokeUiSession> Session<T> {
         }
         if value != "custom" {
             let last_auto_fps = self.lc.read().unwrap().last_auto_fps;
-            if last_auto_fps.unwrap_or(usize::MAX) >= 30 {
-                // non custom quality use 30 fps
-                let msg = self.lc.write().unwrap().set_custom_fps(30, false);
+            if last_auto_fps.unwrap_or(usize::MAX) >= if cfg!(feature = "low-latency-video") { 144 } else { 30 } {
+                let fps = if cfg!(feature = "low-latency-video") { 144 } else { 30 };
+                let msg = self.lc.write().unwrap().set_custom_fps(fps, false);
                 self.send(Data::Message(msg));
             }
         }

@@ -1422,12 +1422,12 @@ impl<T: InvokeUiSession> Remote<T> {
         let custom_fps = self.handler.lc.read().unwrap().custom_fps.clone();
         let custom_fps = custom_fps.lock().unwrap().clone();
         let mut custom_fps = custom_fps.unwrap_or(if cfg!(feature = "low-latency-video") {
-            60
+            144
         } else {
             30
         });
-        if custom_fps < 5 || custom_fps > 120 {
-            custom_fps = if cfg!(feature = "low-latency-video") { 60 } else { 30 };
+        if custom_fps < 5 || custom_fps > if cfg!(feature = "low-latency-video") { 240 } else { 120 } {
+            custom_fps = if cfg!(feature = "low-latency-video") { 144 } else { 30 };
         }
         let inactive_threshold = 15;
         let max_queue_len = self

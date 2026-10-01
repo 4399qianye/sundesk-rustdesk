@@ -134,6 +134,17 @@ fn raising_the_cap_does_not_restart_startup_acceleration() {
     }
 }
 
+#[cfg(feature = "low-latency-video")]
+#[test]
+fn low_latency_target_supports_144_fps() {
+    let mut qos = session(144, false);
+    qos.user_custom_fps(1, 144);
+    for _ in 0..8 {
+        reply(&mut qos, 10);
+    }
+    assert_eq!(qos.fps(), 144);
+}
+
 #[test]
 fn startup_remains_per_viewer_and_preserves_the_join_guard() {
     let mut qos = session(120, false);

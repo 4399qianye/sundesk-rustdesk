@@ -3417,8 +3417,13 @@ impl LoginConfigHandler {
             msg.custom_image_quality = quality << 8;
             #[cfg(feature = "flutter")]
             if let Some(custom_fps) = self.options.get("custom-fps") {
-                let mut custom_fps = custom_fps.parse().unwrap_or(30);
-                if !allow_more && custom_fps > 30 {
+                let mut custom_fps = custom_fps.parse().unwrap_or(if cfg!(feature = "low-latency-video") { 144 } else { 30 });
+                // Older low-latency builds persisted 30 FPS as their default.
+                // Migrate that value so the new high-refresh default is effective.
+                if cfg!(feature = "low-latency-video") && custom_fps == 30 {
+                    custom_fps = 144;
+                }
+                if !allow_more && !cfg!(feature = "low-latency-video") && custom_fps > 30 {
                     custom_fps = 30;
                 }
                 msg.custom_fps = custom_fps;

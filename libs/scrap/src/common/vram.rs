@@ -73,7 +73,7 @@ impl EncoderApi for VRamEncoder {
                         width: config.width as _,
                         height: config.height as _,
                         kbitrate: bitrate as _,
-                        framerate: if cfg!(feature = "low-latency-video") { 60 } else { 30 },
+                        framerate: if cfg!(feature = "low-latency-video") { 144 } else { 30 },
                         gop,
                     },
                 };
@@ -389,7 +389,7 @@ pub(crate) fn check_available_vram() -> (Vec<FeatureContext>, Vec<DecodeContext>
         width: 1280,
         height: 720,
         kbitrate: 5000,
-        framerate: 60,
+        framerate: if cfg!(feature = "low-latency-video") { 144 } else { 30 },
         gop: MAX_GOP as _,
     };
     let encoders = encode::available(d);
