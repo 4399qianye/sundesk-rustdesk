@@ -172,6 +172,7 @@ impl KcpStream {
             let mut media_frame_id = 0u32;
             let mut media_sequence = 0u16;
             let mut reassembler = Reassembler::default();
+            let mut logged_gamestream_packet = false;
             // Socket errors are ICMP unreachable on a connected UDP socket — advisory, and
             // routine while a hole forms — so treat them as loss and let KCP's pong timeout reap
             // a link that is really dead. One throttle PER DIRECTION: the error is reported once
@@ -240,6 +241,10 @@ impl KcpStream {
                                 let is_gamestream = media::is_gamestream_packet(&buf[..size]);
                                 let is_legacy = media::is_legacy_packet(&buf[..size]);
                                 if is_gamestream || is_legacy {
+                                    if is_gamestream && !logged_gamestream_packet {
+                                        log::debug!("received first GameStream video packet, size={size}");
+                                        logged_gamestream_packet = true;
+                                    }
                                     let key = media_keys
                                         .lock()
                                         .ok()
@@ -247,6 +252,12 @@ impl KcpStream {
                                     if let Some(key) = key {
                                         if is_gamestream {
                                             if let Some(frame) = reassembler.push_gamestream(&buf[..size], &key) {
+                                                if frame.frame_index == 0 {
+                                                    log::debug!(
+                                                        "reassembled first GameStream frame, bytes={}, codec={:?}, key={}",
+                                                        frame.data.len(), frame.codec, frame.key
+                                                    );
+                                                }
                                                 if let Some(data) = media::encode_gamestream_frame(&frame) {
                                                     media_in_sender.try_send(data).ok();
                                                 }

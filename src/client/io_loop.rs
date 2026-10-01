@@ -1564,7 +1564,8 @@ impl<T: InvokeUiSession> Remote<T> {
     }
 
     async fn handle_video_frame(&mut self, vf: VideoFrame, mut peer: Option<&mut Stream>) -> bool {
-        if !self.first_frame {
+        let first_frame = !self.first_frame;
+        if first_frame {
             self.first_frame = true;
             self.handler.close_success();
             self.handler.adapt_size();
@@ -1574,6 +1575,9 @@ impl<T: InvokeUiSession> Remote<T> {
             }
         }
         self.video_format = CodecFormat::from(&vf);
+        if first_frame {
+            log::debug!("accepted first video frame, format={:?}, display={}", self.video_format, vf.display);
+        }
 
         let display = vf.display as usize;
         if !self.video_threads.contains_key(&display) {
@@ -1601,6 +1605,21 @@ impl<T: InvokeUiSession> Remote<T> {
         data: &[u8],
         mut peer: Option<&mut Stream>,
     ) -> bool {
+        // KCP and relay both deliver GameStream packets inside the media path.
+        // KCP can deliver the packet directly, while relay passes it as the
+        // MediaFrame payload, so check the wire format before protobuf parsing.
+        if self.peer_info.gamestream_video && crate::media::is_gamestream_packet(data) {
+            if let Some(game_frame) = self.media_reassembler.push_gamestream_plain(data) {
+                if let Some(inner) = crate::media::encode_gamestream_frame(&game_frame) {
+                    if let Ok(message) = Message::parse_from_bytes(&inner) {
+                        if let Some(message::Union::VideoFrame(video)) = message.union {
+                            return self.handle_video_frame(video, peer.as_deref_mut()).await;
+                        }
+                    }
+                }
+            }
+            return true;
+        }
         let Ok(msg) = Message::parse_from_bytes(data) else {
             return true;
         };
