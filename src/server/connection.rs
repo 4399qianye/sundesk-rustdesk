@@ -786,6 +786,10 @@ impl Connection {
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         std::thread::spawn(move || Self::handle_input(_rx_input, tx_cloned));
         let mut second_timer = crate::rustdesk_interval(time::interval(Duration::from_secs(1)));
+        let mut rx_fast_input = conn
+            .kcp
+            .as_mut()
+            .and_then(|kcp| kcp.take_input_receiver());
 
         #[cfg(feature = "unix-file-copy-paste")]
         let rx_clip_holder;
@@ -811,7 +815,26 @@ impl Connection {
 
         loop {
             tokio::select! {
-                // biased; // video has higher priority // causing test_delay_timer failed while transferring big file
+                biased;
+
+                input = async {
+                    match &mut rx_fast_input {
+                        Some(receiver) => receiver.recv().await,
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    if let Some(input) = input {
+                        if conn.authorized {
+                            if let Ok(msg) = Message::parse_from_bytes(&input) {
+                                if !conn.on_message(msg).await {
+                                    break;
+                                }
+                            }
+                        }
+                    } else {
+                        rx_fast_input = None;
+                    }
+                }
 
                 // Both end an unauthorized connection at once, not on the next timer tick:
                 // told to go to make room, or past the grace for its authorization. Neither

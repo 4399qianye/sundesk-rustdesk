@@ -22,6 +22,8 @@ pub struct KcpStream {
     stop_sender: Option<oneshot::Sender<()>>,
     media: Arc<MediaChannel>,
     media_receiver: Option<mpsc::Receiver<Bytes>>,
+    input_receiver: Option<mpsc::Receiver<Bytes>>,
+    input_sender: mpsc::Sender<Bytes>,
     media_keys: Arc<std::sync::Mutex<Option<(secretbox::Key, secretbox::Key)>>>,
 }
 
@@ -82,6 +84,8 @@ impl KcpStream {
         let (stop_sender, stop_receiver) = oneshot::channel();
         let (media, media_watch) = MediaChannel::new(true);
         let (media_tx, media_receiver) = mpsc::channel(16);
+        let (input_sender, input_out_receiver) = mpsc::channel(128);
+        let (input_in_sender, input_receiver) = mpsc::channel(128);
         let media_keys = Arc::new(std::sync::Mutex::new(None));
         if let Some(packet) = init_packet {
             if packet.len() >= std::mem::size_of::<KcpPacketHeader>() {
@@ -92,6 +96,8 @@ impl KcpStream {
             udp_socket.clone(), input, output, stop_receiver, media_watch, media_tx,
             media_keys.clone(),
             media.clone(),
+            input_out_receiver,
+            input_in_sender,
         )
         .await;
 
@@ -104,6 +110,8 @@ impl KcpStream {
                     stop_sender: Some(stop_sender),
                     media,
                     media_receiver: Some(media_receiver),
+                    input_receiver: Some(input_receiver),
+                    input_sender,
                     media_keys,
                 },
                 Self::create_framed(stream, udp_socket.local_addr().ok()),
@@ -130,11 +138,15 @@ impl KcpStream {
         let (stop_sender, stop_receiver) = oneshot::channel();
         let (media, media_watch) = MediaChannel::new(true);
         let (media_tx, media_receiver) = mpsc::channel(16);
+        let (input_sender, input_out_receiver) = mpsc::channel(128);
+        let (input_in_sender, input_receiver) = mpsc::channel(128);
         let media_keys = Arc::new(std::sync::Mutex::new(None));
         Self::kcp_io(
             udp_socket.clone(), input, output, stop_receiver, media_watch, media_tx,
             media_keys.clone(),
             media.clone(),
+            input_out_receiver,
+            input_in_sender,
         )
         .await;
 
@@ -147,6 +159,8 @@ impl KcpStream {
                     stop_sender: Some(stop_sender),
                     media,
                     media_receiver: Some(media_receiver),
+                    input_receiver: Some(input_receiver),
+                    input_sender,
                     media_keys,
                 },
                 Self::create_framed(stream, udp_socket.local_addr().ok()),
@@ -165,6 +179,8 @@ impl KcpStream {
         media_in_sender: mpsc::Sender<Bytes>,
         media_keys: Arc<std::sync::Mutex<Option<(secretbox::Key, secretbox::Key)>>>,
         media_channel: Arc<MediaChannel>,
+        mut input_out_receiver: mpsc::Receiver<Bytes>,
+        input_in_sender: mpsc::Sender<Bytes>,
     ) {
         let udp = udp_socket.clone();
         tokio::spawn(async move {
@@ -179,9 +195,17 @@ impl KcpStream {
             // and cleared, so send-ok/recv-err alternates and a shared counter never fires.
             loop {
                 tokio::select! {
+                    biased;
                     _ = &mut stop_receiver => {
                         log::debug!("KCP io loop received stop signal");
                         break;
+                    }
+                    Some(data) = input_out_receiver.recv() => {
+                        if let Err(e) = udp.send(&data).await {
+                            if let Some(n) = KCP_SEND_ERR_LOG.due() {
+                                log::debug!("KCP input send error x{n} (treated as loss), last: {e}");
+                            }
+                        }
                     }
                     Some(data) = output.recv() => {
                         if let Err(e) = udp.send(&data.inner()).await {
@@ -238,6 +262,16 @@ impl KcpStream {
                     result = udp.recv_from(&mut buf) => {
                         match result {
                             Ok((size, _)) => {
+                                if let Some(key) = media_keys
+                                    .lock()
+                                    .ok()
+                                    .and_then(|keys| keys.as_ref().map(|keys| keys.1.clone()))
+                                {
+                                    if let Some(input) = media::open_input(&key, &buf[..size]) {
+                                        input_in_sender.try_send(input).ok();
+                                        continue;
+                                    }
+                                }
                                 let is_gamestream = media::is_gamestream_packet(&buf[..size]);
                                 let is_legacy = media::is_legacy_packet(&buf[..size]);
                                 if is_gamestream || is_legacy {
@@ -298,6 +332,24 @@ impl KcpStream {
         if let Ok(mut keys) = self.media_keys.lock() {
             *keys = Some((send, receive));
         }
+    }
+
+    pub fn send_input(&self, data: Bytes) -> bool {
+        let key = self
+            .media_keys
+            .lock()
+            .ok()
+            .and_then(|keys| keys.as_ref().map(|keys| keys.0.clone()));
+        let Some(key) = key else {
+            return false;
+        };
+        self.input_sender
+            .try_send(media::packetize_input(&key, &data))
+            .is_ok()
+    }
+
+    pub fn take_input_receiver(&mut self) -> Option<mpsc::Receiver<Bytes>> {
+        self.input_receiver.take()
     }
 
     pub fn set_media_enabled(&self, enabled: bool) {

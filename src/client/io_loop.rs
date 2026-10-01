@@ -339,7 +339,7 @@ impl<T: InvokeUiSession> Remote<T> {
                         }
                         d = self.receiver.recv() => {
                             if let Some(d) = d {
-                                if !self.handle_msg_from_ui(d, &mut peer).await {
+                                if !self.handle_msg_from_ui(d, &mut peer, kcp.as_ref()).await {
                                     break;
                                 }
                             }
@@ -756,7 +756,12 @@ impl<T: InvokeUiSession> Remote<T> {
         });
     }
 
-    async fn handle_msg_from_ui(&mut self, data: Data, peer: &mut Stream) -> bool {
+    async fn handle_msg_from_ui(
+        &mut self,
+        data: Data,
+        peer: &mut Stream,
+        kcp: Option<&crate::kcp_stream::KcpStream>,
+    ) -> bool {
         match data {
             Data::Close => {
                 self.send_close_reason(peer, "").await;
@@ -793,6 +798,26 @@ impl<T: InvokeUiSession> Remote<T> {
                 }
             }
             Data::Message(msg) => {
+                if cfg!(feature = "low-latency-video")
+                    && self
+                        .media_control
+                        .as_ref()
+                        .is_some_and(|media| media.is_gamestream())
+                    && matches!(
+                        msg.union,
+                        Some(message::Union::MouseEvent(_))
+                            | Some(message::Union::PointerDeviceEvent(_))
+                            | Some(message::Union::KeyEvent(_))
+                    )
+                {
+                    if let Some(kcp) = kcp {
+                        if let Ok(bytes) = msg.write_to_bytes() {
+                            if kcp.send_input(bytes.into()) {
+                                return true;
+                            }
+                        }
+                    }
+                }
                 // The Flutter clipboard broadcast is process-wide, so a clipboard can reach this
                 // round's queue before the round has logged in; it is dropped here, on the round
                 // itself.
@@ -3110,16 +3135,16 @@ mod tests {
     async fn a_clipboard_queued_before_this_rounds_login_is_dropped() {
         let (mut remote, mut peer, mut far) = remote_and_peer().await;
         assert!(!remote.is_connected);
-        assert!(remote.handle_msg_from_ui(clipboard(), &mut peer).await);
+        assert!(remote.handle_msg_from_ui(clipboard(), &mut peer, None).await);
         assert!(
             !arrives(&mut far).await,
             "a clipboard went out before the login"
         );
-        assert!(remote.handle_msg_from_ui(auth_2fa(), &mut peer).await);
+        assert!(remote.handle_msg_from_ui(auth_2fa(), &mut peer, None).await);
         assert!(arrives(&mut far).await, "the 2FA code was held back");
 
         remote.is_connected = true;
-        assert!(remote.handle_msg_from_ui(clipboard(), &mut peer).await);
+        assert!(remote.handle_msg_from_ui(clipboard(), &mut peer, None).await);
         assert!(
             arrives(&mut far).await,
             "a clipboard after the login was held back"

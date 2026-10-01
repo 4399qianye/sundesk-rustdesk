@@ -48,6 +48,36 @@ const LEGACY_HEADER_LEN: usize = 4 + 1 + 8 + 2 + 2 + secretbox::NONCEBYTES;
 const NV_EXTRA_CODEC_H264: u8 = 0x80;
 const NV_EXTRA_CODEC_H265: u8 = 0x81;
 const GAMESTREAM_PLAINTEXT: u8 = 0x01;
+const INPUT_MAGIC: &[u8; 4] = b"RDIN";
+const INPUT_VERSION: u8 = 1;
+const INPUT_HEADER_LEN: usize = 4 + 1 + secretbox::NONCEBYTES;
+
+pub fn packetize_input(key: &secretbox::Key, data: &[u8]) -> Bytes {
+    let nonce = secretbox::gen_nonce();
+    let encrypted = secretbox::seal(data, &nonce, key);
+    let mut packet = Vec::with_capacity(INPUT_HEADER_LEN + encrypted.len());
+    packet.extend_from_slice(INPUT_MAGIC);
+    packet.push(INPUT_VERSION);
+    packet.extend_from_slice(&nonce.0);
+    packet.extend_from_slice(&encrypted);
+    Bytes::from(packet)
+}
+
+pub fn is_input_packet(packet: &[u8]) -> bool {
+    packet.len() >= INPUT_HEADER_LEN + secretbox::MACBYTES
+        && &packet[..4] == INPUT_MAGIC
+        && packet[4] == INPUT_VERSION
+}
+
+pub fn open_input(key: &secretbox::Key, packet: &[u8]) -> Option<Bytes> {
+    if !is_input_packet(packet) {
+        return None;
+    }
+    let nonce = secretbox::Nonce::from_slice(&packet[5..INPUT_HEADER_LEN])?;
+    secretbox::open(&packet[INPUT_HEADER_LEN..], &nonce, key)
+        .ok()
+        .map(Bytes::from)
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Codec {
