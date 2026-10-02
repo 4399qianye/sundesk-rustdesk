@@ -269,7 +269,7 @@ pub fn core_main() -> Option<Vec<String>> {
                 }
                 let (printer_override, debug) = parse_silent_install_args(&args);
                 let options = platform::get_silent_install_options(printer_override);
-                let res = platform::install_me(options, "".to_owned(), true, debug);
+                let res = platform::install_me(&options, "".to_owned(), true, debug);
                 let text = match res {
                     Ok(_) => translate("Installation Successful!".to_string()),
                     Err(err) => {

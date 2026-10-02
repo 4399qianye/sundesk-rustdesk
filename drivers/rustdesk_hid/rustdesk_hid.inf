@@ -1,0 +1,41 @@
+[Version]
+Signature="$WINDOWS NT$"
+Class=HIDClass
+ClassGuid={745A17A0-74D3-11D0-B6FE-00A0C90F57DA}
+Provider=%RustDesk%
+DriverVer=06/01/2026,1.0.0.0
+CatalogFile=rustdesk_hid.cat
+
+[Manufacturer]
+%RustDesk%=RustDesk,NTamd64
+
+[RustDesk.NTamd64]
+%RustDeskHid.DeviceDesc%=RustDeskHid_Install, Root\RustDeskHid
+
+[RustDeskHid_Install]
+CopyFiles=RustDeskHid.CopyFiles
+AddReg=RustDeskHid.AddReg
+
+[RustDeskHid.AddReg]
+HKR,,"DeviceInterfaceGUIDs",0x10000,"{A4D5B0E6-7D4B-4DC8-9DB5-7AE3C6A0F411}"
+
+[DestinationDirs]
+RustDeskHid.CopyFiles=12
+
+[RustDeskHid_Install.Services]
+AddService=RustDeskHid,0x00000002,RustDeskHid.Service
+
+[RustDeskHid.CopyFiles]
+rustdesk_hid.sys
+
+[RustDeskHid.Service]
+DisplayName=%RustDeskHid.SVCDESC%
+ServiceType=1
+StartType=3
+ErrorControl=1
+ServiceBinary=%12%\rustdesk_hid.sys
+
+[Strings]
+RustDesk="RustDesk"
+RustDeskHid.DeviceDesc="RustDesk Virtual HID Keyboard and Mouse"
+RustDeskHid.SVCDESC="RustDesk Virtual HID Driver"

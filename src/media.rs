@@ -6,7 +6,7 @@ use hbb_common::{
     tokio::sync::watch,
 };
 use base::message_proto::{message, video_frame, Message};
-use base::message_proto::{key_event, KeyEvent, MouseEvent};
+use base::message_proto::{key_event, ControlKey, KeyEvent, KeyboardMode, MouseEvent};
 
 pub fn stream_keys(stream: &Stream) -> Option<(secretbox::Key, secretbox::Key)> {
     match stream {
@@ -97,6 +97,67 @@ fn input_header(magic: u32, payload_len: usize, out: &mut Vec<u8>) {
     out.extend_from_slice(&magic.to_le_bytes());
 }
 
+fn control_key_to_win_scancode(key: ControlKey) -> Option<u16> {
+    Some(match key {
+        ControlKey::Backspace => 0x0e,
+        ControlKey::Tab => 0x0f,
+        ControlKey::Return => 0x1c,
+        ControlKey::Control => 0x1d,
+        ControlKey::RControl => 0xe01d,
+        ControlKey::Shift => 0x2a,
+        ControlKey::RShift => 0x36,
+        ControlKey::Alt | ControlKey::Option | ControlKey::Menu => 0x38,
+        ControlKey::RAlt => 0xe038,
+        ControlKey::Pause => 0xe046,
+        ControlKey::CapsLock => 0x3a,
+        ControlKey::Escape => 0x01,
+        ControlKey::Space => 0x39,
+        ControlKey::PageUp => 0xe049,
+        ControlKey::PageDown => 0xe051,
+        ControlKey::End => 0xe04f,
+        ControlKey::Home => 0xe047,
+        ControlKey::LeftArrow => 0xe04b,
+        ControlKey::UpArrow => 0xe048,
+        ControlKey::RightArrow => 0xe04d,
+        ControlKey::DownArrow => 0xe050,
+        ControlKey::Insert => 0xe052,
+        ControlKey::Delete => 0xe053,
+        ControlKey::F1 => 0x3b,
+        ControlKey::F2 => 0x3c,
+        ControlKey::F3 => 0x3d,
+        ControlKey::F4 => 0x3e,
+        ControlKey::F5 => 0x3f,
+        ControlKey::F6 => 0x40,
+        ControlKey::F7 => 0x41,
+        ControlKey::F8 => 0x42,
+        ControlKey::F9 => 0x43,
+        ControlKey::F10 => 0x44,
+        ControlKey::F11 => 0x57,
+        ControlKey::F12 => 0x58,
+        ControlKey::NumLock => 0x45,
+        ControlKey::Scroll => 0x46,
+        ControlKey::RWin => 0xe05c,
+        ControlKey::Apps => 0xe05d,
+        ControlKey::NumpadEnter => 0xe01c,
+        ControlKey::Multiply => 0x37,
+        ControlKey::Add => 0x4e,
+        ControlKey::Subtract => 0x4a,
+        ControlKey::Decimal => 0x53,
+        ControlKey::Divide => 0xe035,
+        ControlKey::Numpad0 => 0x52,
+        ControlKey::Numpad1 => 0x4f,
+        ControlKey::Numpad2 => 0x50,
+        ControlKey::Numpad3 => 0x51,
+        ControlKey::Numpad4 => 0x4b,
+        ControlKey::Numpad5 => 0x4c,
+        ControlKey::Numpad6 => 0x4d,
+        ControlKey::Numpad7 => 0x47,
+        ControlKey::Numpad8 => 0x48,
+        ControlKey::Numpad9 => 0x49,
+        _ => return None,
+    })
+}
+
 pub fn encode_sunshine_input(message: &Message) -> Option<Bytes> {
     let mut packet = Vec::new();
     match message.union.as_ref()? {
@@ -115,17 +176,19 @@ pub fn encode_sunshine_input(message: &Message) -> Option<Bytes> {
                     &mut packet,
                 );
                 packet.push(button);
-            } else {
+            } else if kind == 5 {
                 input_header(INPUT_MOUSE_REL, 4, &mut packet);
                 put_be_i16(&mut packet, mouse.x);
                 put_be_i16(&mut packet, mouse.y);
+            } else {
+                return None;
             }
         }
         message::Union::KeyEvent(key) => {
             let (code, unicode) = match key.union.as_ref()? {
                 key_event::Union::Chr(code) => (*code as u16, false),
                 key_event::Union::ControlKey(control) => {
-                    (control.enum_value_or_default() as u16, false)
+                    (control_key_to_win_scancode(control.enum_value_or_default())?, false)
                 }
                 key_event::Union::Unicode(code) => (*code as u16, true),
                 _ => return None,
@@ -159,7 +222,12 @@ pub fn decode_sunshine_input(packet: &[u8]) -> Option<Message> {
         INPUT_MOUSE_REL if payload.len() >= 4 => {
             let x = i16::from_be_bytes(payload[..2].try_into().ok()?) as i32;
             let y = i16::from_be_bytes(payload[2..4].try_into().ok()?) as i32;
-            message.set_mouse_event(MouseEvent { x, y, ..Default::default() });
+            message.set_mouse_event(MouseEvent {
+                mask: 5,
+                x,
+                y,
+                ..Default::default()
+            });
         }
         INPUT_MOUSE_BUTTON_DOWN | INPUT_MOUSE_BUTTON_UP if !payload.is_empty() => {
             let button = payload[0] as i32;
@@ -181,6 +249,7 @@ pub fn decode_sunshine_input(packet: &[u8]) -> Option<Message> {
             let code = u16::from_be_bytes(payload[1..3].try_into().ok()?) as u32;
             let mut key = KeyEvent::new();
             key.down = magic == INPUT_KEY_DOWN;
+            key.mode = KeyboardMode::Map.into();
             key.set_chr(code);
             message.set_key_event(key);
         }

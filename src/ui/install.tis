@@ -9,6 +9,8 @@ class Install: Reactor.Component {
         const install_options = JSON.parse(view.install_options());
         const desktop_icon = { checked: install_options?.DESKTOPSHORTCUTS == '0' ? false : true };
         const startmenu_shortcuts = { checked: install_options?.STARTMENUSHORTCUTS == '0' ? false : true };
+        const hid_available = install_options?.HID_AVAILABLE == '1';
+        const hid = { checked: install_options?.HID == '1' };
         return <div .content>
             <div style="font-size: 2em;">{translate('Installation')}</div>
             <div style="margin: 2em 0;">{translate('Installation Path')} {": "}<input|text disabled value={view.install_path()} #path_input />
@@ -16,6 +18,7 @@ class Install: Reactor.Component {
             </div>
             <div><button|checkbox #startmenu {startmenu_shortcuts}>{translate('Create start menu shortcuts')}</button></div>
             <div><button|checkbox #desktopicon {desktop_icon}>{translate('Create desktop icon')}</button></div>
+            {hid_available && <div><button|checkbox #hid {hid}>{translate('Install')} RustDesk HID Driver</button></div>}
             <div #agreement .link style="margin-top: 2em;">{translate('End-user license agreement')}</div>
             <div>{translate('agreement_tip')}</div>
             <div style="height: 1px; background: gray; margin-top: 1em" />
@@ -62,6 +65,9 @@ class Install: Reactor.Component {
         }
         if ($(#desktopicon).value) {
             args += "desktopicon ";
+        }
+        if ($(#hid) && $(#hid).value) {
+            args += "hid ";
         }
         view.install_me(args, install_path);
     }

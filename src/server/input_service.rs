@@ -1284,6 +1284,18 @@ pub fn handle_mouse_simulation_(evt: &MouseEvent, conn: i32) {
     }
 
     #[cfg(windows)]
+    if crate::platform::windows_hid::available()
+        && (evt.mask & MOUSE_TYPE_MASK) != MOUSE_TYPE_MOVE
+    {
+        if crate::platform::windows_hid::mouse_event(evt) {
+            if (evt.mask & MOUSE_TYPE_MASK) == MOUSE_TYPE_MOVE_RELATIVE {
+                set_relative_mouse_active(conn, true);
+            }
+            return;
+        }
+    }
+
+    #[cfg(windows)]
     crate::platform::windows::try_change_desktop();
     let buttons = evt.mask >> 3;
     let evt_type = evt.mask & MOUSE_TYPE_MASK;
@@ -2478,6 +2490,13 @@ fn is_legacy_mode(evt: &KeyEvent) -> bool {
 
 pub fn handle_key_(evt: &KeyEvent) {
     if EXITING.load(Ordering::SeqCst) {
+        return;
+    }
+
+    #[cfg(windows)]
+    if crate::platform::windows_hid::available()
+        && crate::platform::windows_hid::key_event(evt)
+    {
         return;
     }
 

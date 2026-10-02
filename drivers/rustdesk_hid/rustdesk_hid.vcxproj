@@ -1,0 +1,36 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project DefaultTargets="Build" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
+  <PropertyGroup>
+    <Configuration>Release</Configuration>
+    <Platform>x64</Platform>
+    <ProjectGuid>{A26B8A68-2F9E-4AE1-8F17-7F7E663C1B2A}</ProjectGuid>
+    <RootNamespace>RustDeskHid</RootNamespace>
+    <WindowsTargetPlatformVersion>10.0</WindowsTargetPlatformVersion>
+    <ConfigurationType>Driver</ConfigurationType>
+    <DriverType>WDM</DriverType>
+    <PlatformToolset>WindowsKernelModeDriver10.0</PlatformToolset>
+    <DriverTargetOSVersion>10.0</DriverTargetOSVersion>
+    <TargetVersion>10.0</TargetVersion>
+    <EnableInf2Cat>true</EnableInf2Cat>
+    <Inf2CatUseLocalTime>true</Inf2CatUseLocalTime>
+    <AdditionalDependencies>$(AdditionalDependencies);VhfKm.lib;Wdmsec.lib</AdditionalDependencies>
+  </PropertyGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
+  <ImportGroup Label="ExtensionSettings">
+    <Import Project="$(VCTargetsPath)\BuildCustomizations\WindowsDriver.props" />
+  </ImportGroup>
+  <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
+  <ImportGroup Label="ExtensionTargets">
+    <Import Project="$(VCTargetsPath)\BuildCustomizations\WindowsDriver.targets" />
+  </ImportGroup>
+  <ItemGroup>
+    <ClCompile Include="driver.c" />
+  </ItemGroup>
+  <ItemGroup>
+    <ClInclude Include="rustdesk_hid.h" />
+  </ItemGroup>
+  <ItemGroup>
+    <Inf Include="rustdesk_hid.inf" />
+  </ItemGroup>
+</Project>

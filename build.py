@@ -34,6 +34,7 @@ else:
     flutter_build_dir = 'build/linux/x64/release/bundle/'
 flutter_build_dir_2 = f'flutter/{flutter_build_dir}'
 skip_cargo = False
+VIRTUAL_HID_DRIVER_FILES = ('rustdesk_hid.sys',)
 
 
 def get_deb_arch() -> str:
@@ -61,6 +62,20 @@ def get_version():
             if line.startswith("version"):
                 return line.replace("version", "").replace("=", "").replace('"', '').strip()
     return ''
+
+
+def stage_virtual_hid_driver(output_dir):
+    if not windows:
+        return
+    os.makedirs(output_dir, exist_ok=True)
+    for filename in VIRTUAL_HID_DRIVER_FILES:
+        source = os.path.join(REPO_ROOT, 'drivers', 'rustdesk_hid', 'x64',
+                              'Release', filename)
+        if not os.path.isfile(source):
+            raise Exception(
+                f'Virtual HID driver file was not built: {source}. '
+                'Build and sign the WDK driver before packaging Windows.')
+        shutil.copy2(source, os.path.join(output_dir, filename))
 
 
 def parse_rc_features(feature):
@@ -979,6 +994,7 @@ def build_flutter_windows(version, features, skip_portable_pack):
     os.chdir('flutter')
     system2('flutter build windows --release')
     os.chdir('..')
+    stage_virtual_hid_driver(flutter_build_dir_2)
     shutil.copy2('target/release/deps/dylib_virtual_display.dll',
                  flutter_build_dir_2)
     if skip_portable_pack:

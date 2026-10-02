@@ -119,9 +119,13 @@ pub const SET_FOREGROUND_WINDOW: &'static str = "SET_FOREGROUND_WINDOW";
 const REG_NAME_INSTALL_DESKTOPSHORTCUTS: &str = "DESKTOPSHORTCUTS";
 const REG_NAME_INSTALL_STARTMENUSHORTCUTS: &str = "STARTMENUSHORTCUTS";
 pub const REG_NAME_INSTALL_PRINTER: &str = "PRINTER";
+pub const REG_NAME_INSTALL_HID: &str = "HID";
 const REG_NAME_MSI_PRODUCT_CODE: &str = "MsiProductCode";
 const REG_NAME_UNINSTALL_STRING: &str = "UninstallString";
 const REG_NAME_WINDOWS_INSTALLER: &str = "WindowsInstaller";
+const REG_NAME_INSTALL_HID_AVAILABLE: &str = "HID_AVAILABLE";
+const HID_DRIVER_FILENAME: &str = "rustdesk_hid.sys";
+const HID_SERVICE_NAME: &str = "RustDeskHid";
 const MSI_WINDOWS_INSTALLER_VALUE: u32 = 1;
 const MSI_EXIT_SUCCESS_REBOOT_INITIATED: u32 = 1641;
 const MSI_EXIT_SUCCESS_REBOOT_REQUIRED: u32 = 3010;
@@ -1350,10 +1354,22 @@ pub fn get_install_options() -> String {
     if let Some(printer) = printer {
         opts.insert(REG_NAME_INSTALL_PRINTER, printer);
     }
+    if bundled_hid_driver().is_some() {
+        opts.insert(REG_NAME_INSTALL_HID_AVAILABLE, "1".to_owned());
+    }
+    if let Some(hid) = get_reg_of_hkcr(&subkey, REG_NAME_INSTALL_HID) {
+        opts.insert(REG_NAME_INSTALL_HID, hid);
+    }
     serde_json::to_string(&opts).unwrap_or("{}".to_owned())
 }
 
-pub fn get_silent_install_options(printer_override: Option<bool>) -> &'static str {
+fn bundled_hid_driver() -> Option<PathBuf> {
+    let executable = std::env::current_exe().ok()?;
+    let path = executable.parent()?.join(HID_DRIVER_FILENAME);
+    path.is_file().then_some(path)
+}
+
+pub fn get_silent_install_options(printer_override: Option<bool>) -> String {
     let install_printer = match printer_override {
         Some(override_value) => override_value,
         None => {
@@ -1363,11 +1379,19 @@ pub fn get_silent_install_options(printer_override: Option<bool>) -> &'static st
             printer.as_deref() == Some("1")
         }
     };
-    if install_printer && is_win_10_or_greater() {
-        "desktopicon startmenu printer"
+    let mut options = if install_printer && is_win_10_or_greater() {
+        "desktopicon startmenu printer".to_owned()
     } else {
-        "desktopicon startmenu"
+        "desktopicon startmenu".to_owned()
+    };
+    let app_name = crate::get_app_name();
+    let subkey = format!(".{}", app_name.to_lowercase());
+    if get_reg_of_hkcr(&subkey, REG_NAME_INSTALL_HID).as_deref() == Some("1")
+        && bundled_hid_driver().is_some()
+    {
+        options.push_str(" hid");
     }
+    options
 }
 
 // This function return Option<String>, because some registry value may be empty.
@@ -1671,6 +1695,27 @@ copy /Y \"{tmp_path}\\Uninstall {app_name}.lnk\" \"{start_menu}\\\"
     if install_printer {
         reg_value_printer = "1".to_owned();
     }
+    let install_hid = options.contains("hid") && bundled_hid_driver().is_some();
+    let reg_value_hid = if install_hid { "1" } else { "0" };
+    let install_hid_cmd = if install_hid {
+        let driver = bundled_hid_driver()
+            .ok_or_else(|| anyhow!("RustDesk HID driver is not included in this package"))?;
+        let driver = driver
+            .to_str()
+            .ok_or_else(|| anyhow!("RustDesk HID driver path is not valid Unicode"))?;
+        validate_install_value(driver)?;
+        let installed_driver = format!("{path}\\{HID_DRIVER_FILENAME}");
+        validate_install_value(&installed_driver)?;
+        Some(format!(
+            "copy /Y \"{driver}\" \"{installed_driver}\" > nul || exit /b 1\r\n\
+             sc stop {HID_SERVICE_NAME} > nul 2>&1\r\n\
+             sc delete {HID_SERVICE_NAME} > nul 2>&1\r\n\
+             sc create {HID_SERVICE_NAME} type= kernel start= demand binPath= \"{installed_driver}\" DisplayName= \"RustDesk Virtual HID Driver\" || exit /b 1\r\n\
+             sc start {HID_SERVICE_NAME} || exit /b 1"
+        ))
+    } else {
+        None
+    };
 
     let meta = std::fs::symlink_metadata(&current_exe)?;
     let mut size = meta.len() / 1024;
@@ -1727,6 +1772,7 @@ copy /Y \"{tmp_path}\\{app_name} Tray.lnk\" \"%PROGRAMDATA%\\Microsoft\\Windows\
 chcp 65001
 md \"{path}\"
 {copy_exe}
+{install_hid}
 reg add {subkey} /f
 reg add {subkey} /f /v DisplayIcon /t REG_SZ /d \"{display_icon}\"
 reg add {subkey} /f /v DisplayName /t REG_SZ /d \"{app_name}\"
@@ -1738,6 +1784,7 @@ reg add {subkey} /f /v Publisher /t REG_SZ /d \"{app_name}\"
 reg add {subkey} /f /v VersionMajor /t REG_DWORD /d {version_major}
 reg add {subkey} /f /v VersionMinor /t REG_DWORD /d {version_minor}
 reg add {subkey} /f /v VersionBuild /t REG_DWORD /d {version_build}
+reg add {subkey} /f /v {reg_name_install_hid} /t REG_SZ /d \"{reg_value_hid}\"
 reg add {subkey} /f /v UninstallString /t REG_SZ /d \"\\\"{nested_exe}\\\" --uninstall\"
 reg add {subkey} /f /v EstimatedSize /t REG_DWORD /d {size}
 reg add {subkey} /f /v WindowsInstaller /t REG_DWORD /d 0
@@ -1765,6 +1812,9 @@ copy /Y \"{tmp_path}\\Uninstall {app_name}.lnk\" \"{path}\\\"
         sleep = if debug { "timeout 300" } else { "" },
         dels = if debug { "" } else { &dels },
         copy_exe = copy_exe_cmd(&src_exe, &exe, &path)?,
+        install_hid = install_hid_cmd.unwrap_or_default(),
+        reg_name_install_hid = REG_NAME_INSTALL_HID,
+        reg_value_hid,
         import_config = get_import_config(&exe),
     );
     run_cmds(cmds, debug, "install")?;
@@ -1798,6 +1848,8 @@ fn get_before_uninstall(kill_self: bool) -> String {
     chcp 65001
     sc stop {app_name}
     sc delete {app_name}
+    sc stop {hid_service_name}
+    sc delete {hid_service_name}
     taskkill /F /IM {broker_exe}
     taskkill /F /IM {app_name}.exe{filter}
     reg delete HKEY_CLASSES_ROOT\\.{ext} /f
@@ -1805,6 +1857,7 @@ fn get_before_uninstall(kill_self: bool) -> String {
     netsh advfirewall firewall delete rule name=\"{app_name} Service\"
     ",
         broker_exe = WIN_TOPMOST_INJECTED_PROCESS_EXE,
+        hid_service_name = HID_SERVICE_NAME,
     )
 }
 
