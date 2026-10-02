@@ -126,11 +126,19 @@ jobs:
       - name: Build RustDesk virtual HID driver
         shell: pwsh
         run: |
-          $msbuild = Get-Command msbuild.exe -ErrorAction SilentlyContinue
-          if (-not $msbuild) {
-            throw "MSBuild is not available on the runner"
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          if (-not (Test-Path $vswhere)) {
+            throw "vswhere.exe is not available on the runner"
           }
-          msbuild drivers/rustdesk_hid/rustdesk_hid.vcxproj /m /p:Configuration=Release /p:Platform=x64
+          $msbuildPaths = @(& $vswhere -latest -products * -requires Microsoft.Component.MSBuild -find MSBuild\**\Bin\MSBuild.exe)
+          if ($msbuildPaths.Count -eq 0) {
+            throw "MSBuild is not installed on the runner"
+          }
+          $msbuild = $msbuildPaths[0]
+          & $msbuild drivers/rustdesk_hid/rustdesk_hid.vcxproj /m /p:Configuration=Release /p:Platform=x64
+          if ($LASTEXITCODE -ne 0) {
+            throw "Virtual HID driver build failed with exit code $LASTEXITCODE"
+          }
           $driver = "drivers/rustdesk_hid/x64/Release/rustdesk_hid.sys"
           if (-not (Test-Path $driver)) {
             throw "Virtual HID driver was not produced: $driver"
