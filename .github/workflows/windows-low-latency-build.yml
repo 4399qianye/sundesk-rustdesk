@@ -152,18 +152,17 @@ jobs:
             throw "MSVC x64 compiler was not found"
           }
           $kitRoot = "${env:ProgramFiles(x86)}\Windows Kits\10"
-          $kitVersion = Get-ChildItem "$kitRoot\Include" -Directory |
-            Sort-Object Name -Descending | Select-Object -First 1 -ExpandProperty Name
-          $ntddk = Get-ChildItem "$kitRoot\Include" -Filter ntddk.h -Recurse |
-            Select-Object -First 1 -ExpandProperty DirectoryName
-          if (-not $ntddk) {
+          $ntddkHeader = Get-ChildItem "$kitRoot\Include" -Filter ntddk.h -Recurse |
+            Select-Object -First 1
+          if (-not $ntddkHeader) {
             throw "WDK ntddk.h was not installed under $kitRoot"
           }
-          Write-Host "Using WDK headers from $ntddk"
+          $include = Split-Path $ntddkHeader.DirectoryName -Parent
+          $kitVersion = Split-Path $include -Leaf
+          Write-Host "Using WDK headers from $include"
           $source = (Resolve-Path "drivers/rustdesk_hid/driver.c").Path
           $outDir = Join-Path (Resolve-Path "drivers/rustdesk_hid").Path "x64\Release"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
-          $include = "$kitRoot\Include\$kitVersion"
           $lib = "$kitRoot\Lib\$kitVersion"
           $msvcBin = $cl.DirectoryName
           $msvcRoot = Split-Path (Split-Path (Split-Path $msvcBin -Parent) -Parent) -Parent
