@@ -80,6 +80,7 @@ NTSTATUS RustDeskHidDeviceControl(PDEVICE_OBJECT device, PIRP irp)
 
 VOID RustDeskHidUnload(PDRIVER_OBJECT driver)
 {
+    UNREFERENCED_PARAMETER(driver);
     UNICODE_STRING dosName;
     RtlInitUnicodeString(&dosName, RUSTDESK_HID_DOS_NAME);
     IoDeleteSymbolicLink(&dosName);
