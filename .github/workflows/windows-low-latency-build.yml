@@ -154,6 +154,12 @@ jobs:
           $kitRoot = "${env:ProgramFiles(x86)}\Windows Kits\10"
           $kitVersion = Get-ChildItem "$kitRoot\Include" -Directory |
             Sort-Object Name -Descending | Select-Object -First 1 -ExpandProperty Name
+          $ntddk = Get-ChildItem "$kitRoot\Include" -Filter ntddk.h -Recurse |
+            Select-Object -First 1 -ExpandProperty DirectoryName
+          if (-not $ntddk) {
+            throw "WDK ntddk.h was not installed under $kitRoot"
+          }
+          Write-Host "Using WDK headers from $ntddk"
           $source = (Resolve-Path "drivers/rustdesk_hid/driver.c").Path
           $outDir = Join-Path (Resolve-Path "drivers/rustdesk_hid").Path "x64\Release"
           New-Item -ItemType Directory -Force -Path $outDir | Out-Null
@@ -166,9 +172,12 @@ jobs:
           $env:Lib = "$lib\km\x64;$lib\um\x64;$msvcRoot\lib\x64"
           $obj = Join-Path $outDir "driver.obj"
           $driver = Join-Path $outDir "rustdesk_hid.sys"
-          & $cl.FullName /nologo /c /kernel /Zl /W4 /D_AMD64_ /D_KERNEL_MODE /DNTDDI_VERSION=0x0A000000 /Fo$obj $source
+          & $cl.FullName /nologo /c /kernel /Zl /W4 /D_AMD64_ /D_KERNEL_MODE /DNTDDI_VERSION=0x0A000000 `
+            /I"$include\km" /I"$include\shared" /I"$include\um" /I"$msvcRoot\include" /Fo$obj $source
           if ($LASTEXITCODE -ne 0) { throw "Virtual HID driver C compilation failed" }
-          & link.exe /nologo /driver /subsystem:native /entry:DriverEntry /out:$driver $obj ntoskrnl.lib VhfKm.lib Wdmsec.lib
+          & link.exe /nologo /driver /subsystem:native /entry:DriverEntry /out:$driver `
+            /LIBPATH:"$lib\km\x64" /LIBPATH:"$lib\um\x64" /LIBPATH:"$msvcRoot\lib\x64" `
+            $obj ntoskrnl.lib VhfKm.lib Wdmsec.lib
           if ($LASTEXITCODE -ne 0) { throw "Virtual HID driver link failed" }
           if (-not (Test-Path $driver)) {
             throw "Virtual HID driver was not produced: $driver"
