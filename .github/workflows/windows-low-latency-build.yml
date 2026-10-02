@@ -116,10 +116,10 @@ jobs:
           $wdk = "C:\Program Files (x86)\Windows Kits\10\build\10.0.26100.0"
           if (-not (Test-Path $wdk)) {
             Invoke-WebRequest `
-              -Uri "https://go.microsoft.com/fwlink/?linkid=2249371" `
+              -Uri "https://go.microsoft.com/fwlink/?linkid=2335869" `
               -OutFile "$env:RUNNER_TEMP\wdksetup.exe"
             Start-Process "$env:RUNNER_TEMP\wdksetup.exe" `
-              -ArgumentList "/quiet", "/features", "OptionId.WindowsDesktopDebuggers", "OptionId.WindowsDriverKit" `
+              -ArgumentList "/quiet", "/norestart" `
               -Wait -NoNewWindow
           }
 
@@ -135,7 +135,20 @@ jobs:
             throw "MSBuild is not installed on the runner"
           }
           $msbuild = $msbuildPaths[0]
-          & $msbuild drivers/rustdesk_hid/rustdesk_hid.vcxproj /m /p:Configuration=Release /p:Platform=x64
+          $wdkProps = @(Get-ChildItem `
+            -Path "${env:ProgramFiles(x86)}\MSBuild", "${env:ProgramFiles(x86)}\Windows Kits" `
+            -Filter "WindowsDriver.props" -Recurse -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty FullName)
+          $wdkTargets = @(Get-ChildItem `
+            -Path "${env:ProgramFiles(x86)}\MSBuild", "${env:ProgramFiles(x86)}\Windows Kits" `
+            -Filter "WindowsDriver.targets" -Recurse -ErrorAction SilentlyContinue |
+            Select-Object -ExpandProperty FullName)
+          if ($wdkProps.Count -eq 0 -or $wdkTargets.Count -eq 0) {
+            throw "WDK MSBuild integration files were not installed"
+          }
+          & $msbuild drivers/rustdesk_hid/rustdesk_hid.vcxproj /m `
+            /p:Configuration=Release /p:Platform=x64 `
+            /p:RustDeskWdkProps=$wdkProps[0] /p:RustDeskWdkTargets=$wdkTargets[0]
           if ($LASTEXITCODE -ne 0) {
             throw "Virtual HID driver build failed with exit code $LASTEXITCODE"
           }

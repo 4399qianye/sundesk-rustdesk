@@ -18,11 +18,11 @@
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.Default.props" />
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.props" />
   <ImportGroup Label="ExtensionSettings">
-    <Import Project="$(VCTargetsPath)\BuildCustomizations\WindowsDriver.props" />
+    <Import Project="$(RustDeskWdkProps)" />
   </ImportGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">
-    <Import Project="$(VCTargetsPath)\BuildCustomizations\WindowsDriver.targets" />
+    <Import Project="$(RustDeskWdkTargets)" />
   </ImportGroup>
   <ItemGroup>
     <ClCompile Include="driver.c" />
