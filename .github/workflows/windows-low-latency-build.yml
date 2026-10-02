@@ -146,11 +146,11 @@ jobs:
           $msbuild = $msbuildPaths[0]
           $wdkProps = @(Get-ChildItem `
             -Path "${env:ProgramFiles(x86)}\MSBuild", "${env:ProgramFiles(x86)}\Windows Kits" `
-            -Filter "WindowsDriver.props" -Recurse -ErrorAction SilentlyContinue |
+            -Include "WindowsDriver.props", "Microsoft.DriverKit.props" -Recurse -ErrorAction SilentlyContinue |
             Select-Object -ExpandProperty FullName)
           $wdkTargets = @(Get-ChildItem `
             -Path "${env:ProgramFiles(x86)}\MSBuild", "${env:ProgramFiles(x86)}\Windows Kits" `
-            -Filter "WindowsDriver.targets" -Recurse -ErrorAction SilentlyContinue |
+            -Include "WindowsDriver.targets", "Microsoft.DriverKit.targets" -Recurse -ErrorAction SilentlyContinue |
             Select-Object -ExpandProperty FullName)
           if ($wdkProps.Count -eq 0 -or $wdkTargets.Count -eq 0) {
             throw "WDK MSBuild integration files were not installed"
