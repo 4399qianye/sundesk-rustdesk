@@ -3,7 +3,6 @@ fn build_windows() {
     let file = "src/platform/windows.cc";
     let file2 = "src/platform/windows_delete_test_cert.cc";
     cc::Build::new()
-        .cpp(true)
         .file(file)
         .file(file2)
         .file("src/platform/windows_hid.cc")
