@@ -167,12 +167,12 @@ jobs:
           $msvcBin = $cl.DirectoryName
           $msvcRoot = Split-Path (Split-Path (Split-Path $msvcBin -Parent) -Parent) -Parent
           $env:Path = "$msvcBin;$env:Path"
-          $env:Include = "$include\km;$include\shared;$include\um;$msvcRoot\include"
+          $env:Include = "$include\km;$include\shared;$include\um;$include\ucrt;$msvcRoot\include"
           $env:Lib = "$lib\km\x64;$lib\um\x64;$msvcRoot\lib\x64"
           $obj = Join-Path $outDir "driver.obj"
           $driver = Join-Path $outDir "rustdesk_hid.sys"
           & $cl.FullName /nologo /c /kernel /Zl /W4 /D_AMD64_ /D_KERNEL_MODE /DNTDDI_VERSION=0x0A000000 `
-            /I"$include\km" /I"$include\shared" /I"$include\um" /I"$msvcRoot\include" /Fo$obj $source
+            /I"$include\km" /I"$include\shared" /I"$include\um" /I"$include\ucrt" /I"$msvcRoot\include" /Fo$obj $source
           if ($LASTEXITCODE -ne 0) { throw "Virtual HID driver C compilation failed" }
           & link.exe /nologo /driver /subsystem:native /entry:DriverEntry /out:$driver `
             /LIBPATH:"$lib\km\x64" /LIBPATH:"$lib\um\x64" /LIBPATH:"$msvcRoot\lib\x64" `
