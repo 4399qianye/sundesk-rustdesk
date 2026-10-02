@@ -1814,7 +1814,7 @@ copy /Y \"{tmp_path}\\Uninstall {app_name}.lnk\" \"{path}\\\"
         copy_exe = copy_exe_cmd(&src_exe, &exe, &path)?,
         install_hid = install_hid_cmd.unwrap_or_default(),
         reg_name_install_hid = REG_NAME_INSTALL_HID,
-        reg_value_hid,
+        reg_value_hid = reg_value_hid,
         import_config = get_import_config(&exe),
     );
     run_cmds(cmds, debug, "install")?;
