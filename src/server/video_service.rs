@@ -64,7 +64,10 @@ use std::{
 
 pub const OPTION_REFRESH: &'static str = "refresh";
 
-const LOW_LATENCY_WAIT_TIMEOUT_MS: u64 = 16;
+// Do not spend a whole 60 FPS frame waiting for the display-side fetch
+// notification. The fetch notification is only an optional pacing hint; the
+// encoder/capture loop already owns the frame deadline.
+const LOW_LATENCY_WAIT_TIMEOUT_MS: u64 = 1;
 
 #[cfg(windows)]
 const DXGI_RECOVERY_LIMIT: usize = 3;

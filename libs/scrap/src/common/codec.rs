@@ -966,7 +966,11 @@ pub fn base_bitrate(width: u32, height: u32) -> u32 {
     }
     #[cfg(not(target_os = "android"))]
     {
-        bitrate
+        if cfg!(feature = "low-latency-video") {
+            bitrate.saturating_mul(2)
+        } else {
+            bitrate
+        }
     }
 }
 
