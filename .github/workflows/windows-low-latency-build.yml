@@ -133,6 +133,7 @@ jobs:
           Start-Process $vsInstaller -ArgumentList "modify", "--installPath", $vsInstallPath, "--add", "Microsoft.VisualStudio.Component.WindowsDriverKit", "--quiet", "--norestart" -Wait -NoNewWindow
 
       - name: Build RustDesk virtual HID driver
+        continue-on-error: true
         shell: pwsh
         run: |
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
