@@ -981,7 +981,8 @@ class _RemotePageState extends State<RemotePage>
 
     if (!_ffi.canvasModel.cursorEmbedded) {
       paints
-          .add(Obx(() => _showRemoteCursor.isFalse || _remoteCursorMoved.isFalse
+          .add(Obx(() => _ffi.inputModel.relativeMouseMode.value ||
+                  _showRemoteCursor.isFalse || _remoteCursorMoved.isFalse
               ? Offstage()
               : CursorPaint(
                   id: widget.id,

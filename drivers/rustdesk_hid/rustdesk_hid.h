@@ -25,7 +25,7 @@ typedef struct _RUSTDESK_HID_CONTEXT {
     PDEVICE_OBJECT Device;
     KSPIN_LOCK ReportLock;
     UCHAR KeyboardReport[8];
-    UCHAR MouseReport[7];
+    UCHAR MouseReport[8];
 } RUSTDESK_HID_CONTEXT, *PRUSTDESK_HID_CONTEXT;
 
 DRIVER_UNLOAD RustDeskHidUnload;

@@ -177,12 +177,11 @@ class RelativeMouseModel {
   // between Rust rdev grab loop and Flutter keyboard handling.
   DateTime? _lastToggle;
 
-  // Track key down state for exit shortcut.
-  // macOS: Cmd+G - track G key
-  // Windows/Linux: Ctrl+Alt - track whichever modifier was pressed last
+  // Track key down state for local relative-mouse shortcuts.
   // When key down is blocked (shortcut triggered), we also need to block
   // the corresponding key up to avoid orphan key up events being sent to remote.
   bool _exitShortcutKeyDown = false;
+  bool _toggleShortcutKeyDown = false;
 
   // Callback to cancel external throttle timer when relative mouse mode is disabled.
   VoidCallback? onDisabled;
@@ -217,9 +216,10 @@ class RelativeMouseModel {
     _pointerRegionTopLeftGlobal = e.position - e.localPosition;
   }
 
-  /// Shared helper for handling exit shortcut for relative mouse mode.
+  /// Shared helper for handling relative mouse mode shortcuts.
   /// Returns true if the event was handled and should not be forwarded.
   ///
+  /// Toggle shortcut: Ctrl+Alt+Shift+M.
   /// Exit shortcuts (only work when relative mouse mode is active):
   /// - macOS: Cmd+G
   /// - Windows/Linux: Ctrl+Alt (any order - triggered when both are pressed)
@@ -227,18 +227,40 @@ class RelativeMouseModel {
   /// [logicalKey] - the logical key of the event
   /// [isKeyUp] - whether the event is a key up event
   /// [isKeyDown] - whether the event is a key down event
-  /// [ctrlPressed], [altPressed], [commandPressed] - modifier states
+  /// [ctrlPressed], [shiftPressed], [altPressed], [commandPressed] - modifier states
   bool _handleExitShortcut({
     required LogicalKeyboardKey logicalKey,
     required bool isKeyUp,
     required bool isKeyDown,
     required bool ctrlPressed,
+    required bool shiftPressed,
     required bool altPressed,
     required bool commandPressed,
   }) {
     if (!isDesktop || !keyboardPerm() || isViewCamera()) return false;
 
-    // Only handle exit shortcuts when relative mouse mode is active
+    final isToggleShortcut = logicalKey == LogicalKeyboardKey.keyM &&
+        ctrlPressed &&
+        altPressed &&
+        shiftPressed;
+
+    if (isKeyUp && _toggleShortcutKeyDown) {
+      _toggleShortcutKeyDown = false;
+      return true;
+    }
+
+    // Ctrl+Alt+Shift+M toggles gaming mode locally so the M key does not leak
+    // into the remote application while the pointer lock changes.
+    if (isToggleShortcut && isKeyDown) {
+      if (_toggleShortcutKeyDown) return true;
+      setRelativeMouseMode(!enabled.value);
+      _toggleShortcutKeyDown = true;
+      // Consume the shortcut even when enabling failed, so Ctrl+Alt+Shift+M
+      // does not send an unexpected M press to the remote application.
+      return true;
+    }
+
+    // The remaining shortcut only exits an active relative mouse mode.
     if (!enabled.value) return false;
 
     // Block key up if key down was blocked (to avoid orphan key up event on remote).
@@ -289,6 +311,7 @@ class RelativeMouseModel {
       isKeyUp: e is KeyUpEvent,
       isKeyDown: e is KeyDownEvent,
       ctrlPressed: ctrlPressed,
+      shiftPressed: shiftPressed,
       altPressed: altPressed,
       commandPressed: commandPressed,
     );
@@ -303,6 +326,7 @@ class RelativeMouseModel {
       isKeyUp: e is RawKeyUpEvent,
       isKeyDown: e is RawKeyDownEvent,
       ctrlPressed: modifiers.isControlPressed,
+      shiftPressed: modifiers.isShiftPressed,
       altPressed: modifiers.isAltPressed,
       commandPressed: modifiers.isMetaPressed,
     );
@@ -423,12 +447,14 @@ class RelativeMouseModel {
             });
           } else {
             // Windows/Linux: Use Flutter-based cursor recenter approach
-            if (!getPointerInsideImage()) {
-              _releaseCursorClip();
-            }
+            // Enable the state before calculating the lock. The previous order
+            // made updatePointerLockCenter() skip ClipCursor and made the first
+            // recenter return immediately because enabled was still false.
+            enabled.value = true;
+            setPointerInsideImage(true);
 
             updatePointerLockCenter().then((_) => _recenterMouse()).then((_) {
-              if (_enableRequestId != requestId) {
+              if (_enableRequestId != requestId || !enabled.value) {
                 return;
               }
               _completeEnableRelativeMouseMode();
@@ -437,7 +463,7 @@ class RelativeMouseModel {
                 return;
               }
               debugPrint('[RelMouse] Platform setup failed: $e');
-              _resetState();
+              _disableWithCleanup();
             });
           }
         } else {
@@ -449,6 +475,10 @@ class RelativeMouseModel {
         return false;
       }
     } else {
+      // Invalidate an in-flight Windows/Linux setup so it cannot re-enable the
+      // lock after the user exits immediately.
+      _enableRequestId++;
+
       // Best-effort marker for Rust rdev grab loop (ESC behavior).
       // Bypass keyboardPerm check to ensure Rust state is always synced,
       // even if permission was revoked while relative mode was active.
@@ -507,8 +537,8 @@ class RelativeMouseModel {
     });
   }
 
-  // Flag to skip the first mouse move event after recenter (it's the recenter itself).
-  bool _skipNextMouseMove = false;
+  // Ignore synthetic pointer events emitted by SetCursorPos during recenter.
+  DateTime? _ignoreRecenterUntil;
 
   /// Handle relative mouse movement based on current local pointer position.
   /// Returns true if the event was handled in relative mode, false otherwise.
@@ -523,11 +553,22 @@ class RelativeMouseModel {
     // Pointer move/hover implies we're inside the remote image.
     _ensurePointerLockEngaged();
 
-    // Skip the mouse move event triggered by recenter operation itself.
-    if (_skipNextMouseMove) {
-      _skipNextMouseMove = false;
-      _lastPointerLocalPos = localPosition;
-      return true;
+    // SetCursorPos can emit more than one pointer event. Ignore events that
+    // land at the lock center so they cannot become fake view movement.
+    final ignoreRecenterUntil = _ignoreRecenterUntil;
+    if (ignoreRecenterUntil != null) {
+      final center = _pointerLockCenterLocal;
+      if (center != null && (localPosition - center).distance <= 3.0) {
+        _ignoreRecenterUntil = null;
+        _lastPointerLocalPos = localPosition;
+        return true;
+      }
+      if (DateTime.now().isBefore(ignoreRecenterUntil)) {
+        return true;
+      }
+      // The platform did not deliver a center event. Process the next real
+      // move from the known center rather than an old edge position.
+      _ignoreRecenterUntil = null;
     }
 
     final lastLocal = _lastPointerLocalPos;
@@ -743,8 +784,13 @@ class RelativeMouseModel {
           y: center.dy.toInt(),
         );
         if (ok) {
-          // Skip the next mouse move event - it's triggered by the recenter itself.
-          _skipNextMouseMove = true;
+          final centerLocal = _pointerLockCenterLocal;
+          if (centerLocal != null) {
+            _lastPointerLocalPos = centerLocal;
+          }
+          _ignoreRecenterUntil = DateTime.now().add(
+            const Duration(milliseconds: 50),
+          );
           return;
         }
 
@@ -1007,10 +1053,11 @@ class RelativeMouseModel {
     _pointerLockCenterScreen = null;
     _pointerRegionTopLeftGlobal = null;
     _lastPointerLocalPos = null;
-    _skipNextMouseMove = false;
+    _ignoreRecenterUntil = null;
     setPointerInsideImage(false);
     _cursorClipApplied = false;
     _exitShortcutKeyDown = false;
+    _toggleShortcutKeyDown = false;
   }
 
   /// Core cleanup logic shared by [_disableWithCleanup] and [dispose].

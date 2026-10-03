@@ -73,13 +73,33 @@ fn submit_keyboard(report: &[u8; 8]) -> bool {
 }
 
 pub fn mouse_move(dx: i32, dy: i32) -> bool {
-    let mut report = [0u8; 7];
     let state = STATE.lock().unwrap();
-    report[0] = state.mouse_buttons;
+    let buttons = state.mouse_buttons;
     drop(state);
-    report[2..4].copy_from_slice(&(dx.clamp(-32768, 32767) as i16).to_le_bytes());
-    report[4..6].copy_from_slice(&(dy.clamp(-32768, 32767) as i16).to_le_bytes());
-    unsafe { rustdesk_hid_submit(MOUSE_DEVICE, report.as_ptr(), report.len() as u8) == 0 }
+
+    // Use standard 8-bit relative mouse axes for better compatibility with
+    // older games and input stacks that assume a boot-protocol mouse report.
+    let mut remaining_x = dx;
+    let mut remaining_y = dy;
+    loop {
+        let step_x = remaining_x.clamp(-127, 127);
+        let step_y = remaining_y.clamp(-127, 127);
+        let report = [
+            buttons,
+            step_x as i8 as u8,
+            step_y as i8 as u8,
+            0,
+            0,
+        ];
+        if unsafe { rustdesk_hid_submit(MOUSE_DEVICE, report.as_ptr(), report.len() as u8) != 0 } {
+            return false;
+        }
+        remaining_x -= step_x;
+        remaining_y -= step_y;
+        if remaining_x == 0 && remaining_y == 0 {
+            return true;
+        }
+    }
 }
 
 pub fn mouse_button(button: i32, pressed: bool) -> bool {
@@ -97,7 +117,7 @@ pub fn mouse_button(button: i32, pressed: bool) -> bool {
     } else {
         state.mouse_buttons &= !mask;
     }
-    let report = [state.mouse_buttons, 0, 0, 0, 0, 0, 0];
+    let report = [state.mouse_buttons, 0, 0, 0, 0];
     unsafe { rustdesk_hid_submit(MOUSE_DEVICE, report.as_ptr(), report.len() as u8) == 0 }
 }
 
@@ -105,8 +125,6 @@ pub fn mouse_wheel(vertical: i32, horizontal: i32) -> bool {
     let state = STATE.lock().unwrap();
     let report = [
         state.mouse_buttons,
-        0,
-        0,
         0,
         0,
         vertical.clamp(-127, 127) as i8 as u8,
@@ -121,7 +139,7 @@ pub fn reset() {
         state.keyboard = [0; 8];
         state.mouse_buttons = 0;
         let _ = submit_keyboard(&state.keyboard);
-        let mouse = [0, 0, 0, 0, 0, 0, 0];
+        let mouse = [0, 0, 0, 0, 0];
         unsafe {
             let _ = rustdesk_hid_submit(MOUSE_DEVICE, mouse.as_ptr(), mouse.len() as u8);
         }
