@@ -1696,7 +1696,10 @@ copy /Y \"{tmp_path}\\Uninstall {app_name}.lnk\" \"{start_menu}\\\"
         reg_value_printer = "1".to_owned();
     }
     let install_hid = options.contains("hid") && bundled_hid_driver().is_some();
-    let reg_value_hid = if install_hid { "1" } else { "0" };
+    // The driver may be present but unable to start when it is unsigned or
+    // blocked by Windows policy. Do not let that optional component abort the
+    // main installation or prevent shortcut creation.
+    let reg_value_hid = "0";
     let install_hid_cmd = if install_hid {
         let driver = bundled_hid_driver()
             .ok_or_else(|| anyhow!("RustDesk HID driver is not included in this package"))?;
@@ -1707,11 +1710,14 @@ copy /Y \"{tmp_path}\\Uninstall {app_name}.lnk\" \"{start_menu}\\\"
         let installed_driver = format!("{path}\\{HID_DRIVER_FILENAME}");
         validate_install_value(&installed_driver)?;
         Some(format!(
-            "copy /Y \"{driver}\" \"{installed_driver}\" > nul || exit /b 1\r\n\
+            "copy /Y \"{driver}\" \"{installed_driver}\" > nul 2>&1 || echo RustDesk HID driver copy failed\r\n\
              sc stop {HID_SERVICE_NAME} > nul 2>&1\r\n\
              sc delete {HID_SERVICE_NAME} > nul 2>&1\r\n\
-             sc create {HID_SERVICE_NAME} type= kernel start= demand binPath= \"{installed_driver}\" DisplayName= \"RustDesk Virtual HID Driver\" || exit /b 1\r\n\
-             sc start {HID_SERVICE_NAME} || exit /b 1"
+             sc create {HID_SERVICE_NAME} type= kernel start= demand binPath= \"{installed_driver}\" DisplayName= \"RustDesk Virtual HID Driver\" > nul 2>&1 && sc start {HID_SERVICE_NAME} > nul 2>&1\r\n\
+             sc query {HID_SERVICE_NAME} | findstr /I \"RUNNING\" > nul 2>&1 && reg add {subkey} /f /v {reg_name_install_hid} /t REG_SZ /d \"1\" > nul"
+            ,
+            subkey = subkey,
+            reg_name_install_hid = REG_NAME_INSTALL_HID,
         ))
     } else {
         None
@@ -1768,12 +1774,11 @@ copy /Y \"{tmp_path}\\{app_name} Tray.lnk\" \"%PROGRAMDATA%\\Microsoft\\Windows\
     // New code should be written in a common function.
     let cmds = format!(
         "
-{uninstall_str}
+ {uninstall_str}
 chcp 65001
 md \"{path}\"
-{copy_exe}
-{install_hid}
-reg add {subkey} /f
+ {copy_exe}
+ reg add {subkey} /f
 reg add {subkey} /f /v DisplayIcon /t REG_SZ /d \"{display_icon}\"
 reg add {subkey} /f /v DisplayName /t REG_SZ /d \"{app_name}\"
 reg add {subkey} /f /v DisplayVersion /t REG_SZ /d \"{version}\"
@@ -1792,8 +1797,9 @@ reg add {subkey} /f /v WindowsInstaller /t REG_DWORD /d 0
 {uninstall_shortcut_commands}
 {tray_shortcuts}
 {shortcuts}
-copy /Y \"{tmp_path}\\Uninstall {app_name}.lnk\" \"{path}\\\"
-{dels}
+ copy /Y \"{tmp_path}\\Uninstall {app_name}.lnk\" \"{path}\\\"
+ {install_hid}
+ {dels}
 {import_config}
 {after_install}
 {install_remote_printer}
