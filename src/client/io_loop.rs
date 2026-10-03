@@ -1478,8 +1478,19 @@ impl<T: InvokeUiSession> Remote<T> {
         let Some(min_decode_fps) = min_decode_fps else {
             return;
         };
-        let mut limited_fps = if cfg!(feature = "low-latency-video") {
+        let decode_floor = if cfg!(feature = "low-latency-video")
+            && custom_fps >= 60
+            && min_decode_fps >= 55
+        {
+            // One-second decode samples can undercount a stable 60 FPS stream
+            // by one or two frames. Keep the stream at the 60 FPS floor when
+            // the decoder is already operating close to that rate.
+            min_decode_fps.max(60)
+        } else {
             min_decode_fps
+        };
+        let mut limited_fps = if cfg!(feature = "low-latency-video") {
+            decode_floor
         } else if direct {
             min_decode_fps * 9 / 10 // 30 got 27
         } else {

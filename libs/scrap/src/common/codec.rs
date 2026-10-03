@@ -967,9 +967,27 @@ pub fn base_bitrate(width: u32, height: u32) -> u32 {
     #[cfg(not(target_os = "android"))]
     {
         if cfg!(feature = "low-latency-video") {
-            bitrate.saturating_mul(2)
+            // The resolution table is calibrated for ordinary desktop rates.
+            // Fast-motion content at 60 FPS needs roughly four times that
+            // budget to avoid quantizer spikes and visible frame loss.
+            bitrate.saturating_mul(4)
         } else {
             bitrate
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::base_bitrate;
+
+    #[test]
+    fn low_latency_bitrate_budget_is_not_lower_than_normal_budget() {
+        let bitrate = base_bitrate(2560, 1440);
+        if cfg!(feature = "low-latency-video") {
+            assert!(bitrate >= 12_000);
+        } else {
+            assert_eq!(bitrate, 3_000);
         }
     }
 }
