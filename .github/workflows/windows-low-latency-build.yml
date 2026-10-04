@@ -22,6 +22,7 @@ env:
   FLUTTER_VERSION: "3.24.5"
   VCPKG_COMMIT_ID: "9e593bb18ea69cc5095e012465dcd675a822ed0d"
   VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
+  SIGN_BASE_URL: "${{ secrets.SIGN_BASE_URL }}"
 
 jobs:
   build-windows-x64:
@@ -133,7 +134,7 @@ jobs:
           Start-Process $vsInstaller -ArgumentList "modify", "--installPath", $vsInstallPath, "--add", "Microsoft.VisualStudio.Component.WindowsDriverKit", "--quiet", "--norestart" -Wait -NoNewWindow
 
       - name: Build RustDesk virtual HID driver
-        continue-on-error: true
+        continue-on-error: false
         shell: pwsh
         run: |
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
@@ -182,6 +183,47 @@ jobs:
             throw "Virtual HID driver was not produced: $driver"
           }
 
+      - name: Copy virtual HID INF
+        shell: pwsh
+        run: |
+          $outDir = (Resolve-Path "drivers/rustdesk_hid/x64/Release").Path
+          Copy-Item "drivers/rustdesk_hid/rustdesk_hid.inf" $outDir -Force
+
+      - name: Sign virtual HID driver binary
+        if: env.SIGN_BASE_URL != '' && env.SIGN_BASE_URL != '-2'
+        shell: bash
+        run: |
+          pip3 install requests
+          BASE_URL="${{ secrets.SIGN_BASE_URL }}" SECRET_KEY="${{ secrets.SIGN_SECRET_KEY }}" \
+            python3 res/job.py sign_files drivers/rustdesk_hid/x64/Release --only-ext sys
+
+      - name: Generate virtual HID driver catalog
+        shell: pwsh
+        run: |
+          $outDir = (Resolve-Path "drivers/rustdesk_hid/x64/Release").Path
+          $kitRoot = "${env:ProgramFiles(x86)}\Windows Kits\10"
+          $inf2cat = Get-ChildItem "$kitRoot\bin" -Filter Inf2Cat.exe -Recurse |
+            Select-Object -First 1
+          if (-not $inf2cat) { throw "Inf2Cat.exe was not installed with the WDK" }
+          & $inf2cat.FullName /driver:$outDir /os:10_X64 /verbose
+          if ($LASTEXITCODE -ne 0) { throw "Inf2Cat failed for the virtual HID package" }
+          $cat = Join-Path $outDir "rustdesk_hid.cat"
+          if (-not (Test-Path $cat)) { throw "Virtual HID catalog was not produced: $cat" }
+
+      - name: Sign virtual HID catalog
+        if: env.SIGN_BASE_URL != '' && env.SIGN_BASE_URL != '-2'
+        shell: bash
+        run: |
+          BASE_URL="${{ secrets.SIGN_BASE_URL }}" SECRET_KEY="${{ secrets.SIGN_SECRET_KEY }}" \
+            python3 res/job.py sign_files drivers/rustdesk_hid/x64/Release --only-ext cat
+
+      - name: Verify HID signing configuration
+        shell: pwsh
+        run: |
+          if ("${{ secrets.SIGN_BASE_URL }}" -eq "") {
+            Write-Warning "SIGN_BASE_URL is not configured; rustdesk_hid.sys will remain unsigned and cannot load on normal Windows."
+          }
+
       - name: Build Windows low-latency client
         shell: pwsh
         run: |
@@ -202,6 +244,13 @@ jobs:
           $binary = "flutter/build/windows/x64/runner/Release/rustdesk.exe"
           if (-not (Test-Path $binary)) {
             throw "Expected Windows binary was not produced: $binary"
+          }
+          foreach ($file in @(
+            "flutter/build/windows/x64/runner/Release/rustdesk_hid.sys",
+            "flutter/build/windows/x64/runner/Release/rustdesk_hid.inf",
+            "flutter/build/windows/x64/runner/Release/rustdesk_hid.cat"
+          )) {
+            if (-not (Test-Path $file)) { throw "Expected HID package file was not produced: $file" }
           }
           Get-Item $binary | Format-List FullName,Length,LastWriteTime
 

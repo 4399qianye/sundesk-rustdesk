@@ -184,6 +184,7 @@ SIGN_EXTENSIONS = [
     ".dll",
     ".exe",
     ".sys",
+    ".cat",
     ".vxd",
     ".msix",
     ".msixbundle",
@@ -199,6 +200,7 @@ SIGN_EXTENSIONS = [
 
 
 def sign_files(dir_path, only_ext=None):
+    success = True
     if only_ext:
         only_ext = only_ext.split(",")
         for i in range(len(only_ext)):
@@ -217,7 +219,9 @@ def sign_files(dir_path, only_ext=None):
             if ext in SIGN_EXTENSIONS:
                 if not sign_one_file(file_path):
                     logging.error(f"Failed to sign {file_path}")
+                    success = False
                     break
+    return success
 
 
 def main():
@@ -300,7 +304,8 @@ def main():
     if args.command == "sign_one_file":
         sign_one_file(args.file_path)
     elif args.command == "sign_files":
-        sign_files(args.dir_path, args.only_ext)
+        if not sign_files(args.dir_path, args.only_ext):
+            raise SystemExit(1)
     elif args.command == "fetch":
         print(fetch())
     elif args.command == "update_status":

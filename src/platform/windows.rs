@@ -1366,7 +1366,9 @@ pub fn get_install_options() -> String {
 fn bundled_hid_driver() -> Option<PathBuf> {
     let executable = std::env::current_exe().ok()?;
     let path = executable.parent()?.join(HID_DRIVER_FILENAME);
-    path.is_file().then_some(path)
+    let inf = path.with_extension("inf");
+    let cat = path.with_extension("cat");
+    (path.is_file() && inf.is_file() && cat.is_file()).then_some(path)
 }
 
 pub fn get_silent_install_options(printer_override: Option<bool>) -> String {
@@ -1707,13 +1709,21 @@ copy /Y \"{tmp_path}\\Uninstall {app_name}.lnk\" \"{start_menu}\\\"
             .to_str()
             .ok_or_else(|| anyhow!("RustDesk HID driver path is not valid Unicode"))?;
         validate_install_value(driver)?;
+        let driver_dir = driver
+            .rsplit_once('\\')
+            .map(|(dir, _)| dir)
+            .ok_or_else(|| anyhow!("RustDesk HID driver path has no parent directory"))?;
+        let inf = format!("{driver_dir}\\rustdesk_hid.inf");
         let installed_driver = format!("{path}\\{HID_DRIVER_FILENAME}");
         validate_install_value(&installed_driver)?;
+        validate_install_value(&inf)?;
         Some(format!(
-            "copy /Y \"{driver}\" \"{installed_driver}\" > nul 2>&1 || echo RustDesk HID driver copy failed\r\n\
+             "copy /Y \"{driver}\" \"{installed_driver}\" > nul 2>&1\r\n\
+             pnputil /add-driver \"{inf}\" /install > nul 2>&1\r\n\
              sc stop {HID_SERVICE_NAME} > nul 2>&1\r\n\
              sc delete {HID_SERVICE_NAME} > nul 2>&1\r\n\
-             sc create {HID_SERVICE_NAME} type= kernel start= demand binPath= \"{installed_driver}\" DisplayName= \"RustDesk Virtual HID Driver\" > nul 2>&1 && sc start {HID_SERVICE_NAME} > nul 2>&1\r\n\
+             sc query {HID_SERVICE_NAME} > nul 2>&1 || sc create {HID_SERVICE_NAME} type= kernel start= demand binPath= \"{installed_driver}\" DisplayName= \"RustDesk Virtual HID Driver\" > nul 2>&1\r\n\
+             sc start {HID_SERVICE_NAME} > nul 2>&1\r\n\
              sc query {HID_SERVICE_NAME} | findstr /I \"RUNNING\" > nul 2>&1 && reg add {subkey} /f /v {reg_name_install_hid} /t REG_SZ /d \"1\" > nul"
             ,
             subkey = subkey,

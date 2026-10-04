@@ -14,5 +14,8 @@ The current first version exposes:
 - a standard relative mouse report with five buttons and vertical/horizontal wheel;
 - one control IOCTL for submitting either report.
 
-The production installer must ship a Microsoft-trusted signed package. A
-test-signed package is suitable only for a test-signing Windows installation.
+The production installer must ship a Microsoft-trusted signed package. The
+package consists of `rustdesk_hid.inf`, `rustdesk_hid.cat`, and
+`rustdesk_hid.sys`; the installer uses `pnputil /add-driver /install` so the
+driver is registered through Windows Driver Store. A test-signed package is
+suitable only for a test-signing Windows installation.

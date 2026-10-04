@@ -34,7 +34,11 @@ else:
     flutter_build_dir = 'build/linux/x64/release/bundle/'
 flutter_build_dir_2 = f'flutter/{flutter_build_dir}'
 skip_cargo = False
-VIRTUAL_HID_DRIVER_FILES = ('rustdesk_hid.sys',)
+VIRTUAL_HID_DRIVER_FILES = (
+    'rustdesk_hid.sys',
+    'rustdesk_hid.inf',
+    'rustdesk_hid.cat',
+)
 
 
 def get_deb_arch() -> str:
