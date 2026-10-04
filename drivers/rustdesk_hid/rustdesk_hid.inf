@@ -22,6 +22,12 @@ HKR,,"DeviceInterfaceGUIDs",0x10000,"{A4D5B0E6-7D4B-4DC8-9DB5-7AE3C6A0F411}"
 [DestinationDirs]
 RustDeskHid.CopyFiles=12
 
+[SourceDisksNames]
+1=%RustDeskHid.DiskName%,,,
+
+[SourceDisksFiles]
+rustdesk_hid.sys=1
+
 [RustDeskHid_Install.Services]
 AddService=RustDeskHid,0x00000002,RustDeskHid.Service
 
@@ -39,3 +45,4 @@ ServiceBinary=%12%\rustdesk_hid.sys
 RustDesk="RustDesk"
 RustDeskHid.DeviceDesc="RustDesk Virtual HID Keyboard and Mouse"
 RustDeskHid.SVCDESC="RustDesk Virtual HID Driver"
+RustDeskHid.DiskName="RustDesk Virtual HID Driver"
