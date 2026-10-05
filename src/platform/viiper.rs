@@ -315,11 +315,9 @@ fn path_with_usbip(usbip: &PathBuf) -> String {
         return std::env::var("PATH").unwrap_or_default();
     };
     let mut paths = vec![parent.to_path_buf()];
-    paths.extend(
-        std::env::var_os("PATH")
-            .into_iter()
-            .flat_map(|path| std::env::split_paths(&path)),
-    );
+    if let Some(path) = std::env::var_os("PATH") {
+        paths.extend(std::env::split_paths(&path));
+    }
     std::env::join_paths(paths)
         .map(|path| path.to_string_lossy().into_owned())
         .unwrap_or_default()
