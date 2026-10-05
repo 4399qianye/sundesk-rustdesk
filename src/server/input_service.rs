@@ -1284,6 +1284,18 @@ pub fn handle_mouse_simulation_(evt: &MouseEvent, conn: i32) {
     }
 
     #[cfg(windows)]
+    if crate::platform::viiper::available()
+        && (evt.mask & MOUSE_TYPE_MASK) != MOUSE_TYPE_MOVE
+    {
+        if crate::platform::viiper::mouse_event(evt) {
+            if (evt.mask & MOUSE_TYPE_MASK) == MOUSE_TYPE_MOVE_RELATIVE {
+                set_relative_mouse_active(conn, true);
+            }
+            return;
+        }
+    }
+
+    #[cfg(windows)]
     if crate::platform::windows_hid::available()
         && (evt.mask & MOUSE_TYPE_MASK) != MOUSE_TYPE_MOVE
     {
@@ -2490,6 +2502,11 @@ fn is_legacy_mode(evt: &KeyEvent) -> bool {
 
 pub fn handle_key_(evt: &KeyEvent) {
     if EXITING.load(Ordering::SeqCst) {
+        return;
+    }
+
+    #[cfg(windows)]
+    if crate::platform::viiper::available() && crate::platform::viiper::key_event(evt) {
         return;
     }
 

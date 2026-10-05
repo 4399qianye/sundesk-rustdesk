@@ -12,6 +12,8 @@ pub mod windows;
 pub mod win_device;
 #[cfg(windows)]
 pub mod windows_hid;
+#[cfg(windows)]
+pub mod viiper;
 
 #[cfg(target_os = "macos")]
 pub mod macos;
@@ -62,6 +64,8 @@ pub fn breakdown_callback() {
     crate::input_service::clear_remapped_keycode();
     #[cfg(windows)]
     crate::platform::windows_hid::reset();
+    #[cfg(windows)]
+    crate::platform::viiper::reset();
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     crate::input_service::release_device_modifiers();
 }

@@ -19,3 +19,14 @@ package consists of `rustdesk_hid.inf`, `rustdesk_hid.cat`, and
 `rustdesk_hid.sys`; the installer uses `pnputil /add-driver /install` so the
 driver is registered through Windows Driver Store. A test-signed package is
 suitable only for a test-signing Windows installation.
+
+The CI expects a signing service with the `/sign/` endpoint used by
+`bryangerlach/signing_api`. Configure `SIGN_BASE_URL` and `SIGN_API_KEY` in the
+repository secrets. The signing service must use an EV certificate and the
+driver must be submitted through Microsoft's Hardware Developer Program for
+normal Windows 10/11 kernel-mode loading.
+
+For machines with `usbip-win2` installed, RustDesk can use the bundled VIIPER
+sidecar instead of this custom driver. Set `RUSTDESK_VIIPER=1` to enable that
+backend. VIIPER creates standard HID mouse and keyboard devices through the
+signed generic USB/IP driver; it is disabled by default.

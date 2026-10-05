@@ -148,7 +148,7 @@ pub fn reset() {
     }
 }
 
-fn scan_code_usage(code: u32) -> Option<(u8, u8)> {
+pub(crate) fn scan_code_usage(code: u32) -> Option<(u8, u8)> {
     let extended = code & 0xFF00 == 0xE000;
     let scan = (code & 0xFF) as u8;
     let modifier = match (extended, scan) {
@@ -208,7 +208,7 @@ fn scan_code_usage(code: u32) -> Option<(u8, u8)> {
     Some((usage, 0))
 }
 
-fn control_key_usage(key: ControlKey) -> Option<(u8, u8)> {
+pub(crate) fn control_key_usage(key: ControlKey) -> Option<(u8, u8)> {
     let value = match key {
         ControlKey::Alt | ControlKey::Option | ControlKey::Menu => return Some((0, 0x04)),
         ControlKey::RAlt => return Some((0, 0x40)),

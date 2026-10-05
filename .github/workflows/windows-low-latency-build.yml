@@ -23,6 +23,7 @@ env:
   VCPKG_COMMIT_ID: "9e593bb18ea69cc5095e012465dcd675a822ed0d"
   VCPKG_BINARY_SOURCES: "clear;x-gha,readwrite"
   SIGN_BASE_URL: "${{ secrets.SIGN_BASE_URL }}"
+  SIGN_API_KEY: "${{ secrets.SIGN_API_KEY }}"
 
 jobs:
   build-windows-x64:
@@ -191,11 +192,15 @@ jobs:
 
       - name: Sign virtual HID driver binary
         if: env.SIGN_BASE_URL != '' && env.SIGN_BASE_URL != '-2'
-        shell: bash
+        shell: pwsh
         run: |
-          pip3 install requests
-          BASE_URL="${{ secrets.SIGN_BASE_URL }}" SECRET_KEY="${{ secrets.SIGN_SECRET_KEY }}" \
-            python3 res/job.py sign_files drivers/rustdesk_hid/x64/Release --only-ext sys
+          $outDir = (Resolve-Path "drivers/rustdesk_hid/x64/Release").Path
+          $zip = Join-Path $env:RUNNER_TEMP "rustdesk_hid_sys.zip"
+          $signed = Join-Path $env:RUNNER_TEMP "rustdesk_hid_sys_signed.zip"
+          Compress-Archive -Path (Join-Path $outDir "rustdesk_hid.sys") -DestinationPath $zip -Force
+          curl.exe -X POST -F "file=@$zip" -H "X-API-KEY: $env:SIGN_API_KEY" -m 900 "$env:SIGN_BASE_URL/sign/" -o $signed
+          if ($LASTEXITCODE -ne 0) { throw "Virtual HID binary signing request failed" }
+          Expand-Archive -Path $signed -DestinationPath $outDir -Force
 
       - name: Generate virtual HID driver catalog
         shell: pwsh
@@ -212,10 +217,15 @@ jobs:
 
       - name: Sign virtual HID catalog
         if: env.SIGN_BASE_URL != '' && env.SIGN_BASE_URL != '-2'
-        shell: bash
+        shell: pwsh
         run: |
-          BASE_URL="${{ secrets.SIGN_BASE_URL }}" SECRET_KEY="${{ secrets.SIGN_SECRET_KEY }}" \
-            python3 res/job.py sign_files drivers/rustdesk_hid/x64/Release --only-ext cat
+          $outDir = (Resolve-Path "drivers/rustdesk_hid/x64/Release").Path
+          $zip = Join-Path $env:RUNNER_TEMP "rustdesk_hid_cat.zip"
+          $signed = Join-Path $env:RUNNER_TEMP "rustdesk_hid_cat_signed.zip"
+          Compress-Archive -Path (Join-Path $outDir "rustdesk_hid.cat") -DestinationPath $zip -Force
+          curl.exe -X POST -F "file=@$zip" -H "X-API-KEY: $env:SIGN_API_KEY" -m 900 "$env:SIGN_BASE_URL/sign/" -o $signed
+          if ($LASTEXITCODE -ne 0) { throw "Virtual HID catalog signing request failed" }
+          Expand-Archive -Path $signed -DestinationPath $outDir -Force
 
       - name: Verify HID signing configuration
         shell: pwsh
@@ -238,6 +248,23 @@ jobs:
           }
           exit 1
 
+      - name: Include VIIPER sidecar
+        shell: pwsh
+        run: |
+          Invoke-WebRequest `
+            -Uri "https://github.com/Alia5/VIIPER/releases/download/v0.8.2/viiper-windows-amd64.zip" `
+            -OutFile "$env:RUNNER_TEMP\viiper.zip"
+          Expand-Archive -Path "$env:RUNNER_TEMP\viiper.zip" -DestinationPath "$env:RUNNER_TEMP\viiper" -Force
+          $viiper = Get-ChildItem "$env:RUNNER_TEMP\viiper" -Filter viiper.exe -Recurse | Select-Object -First 1
+          if (-not $viiper) { throw "VIIPER executable was not found in the release archive" }
+          Copy-Item $viiper.FullName "flutter/build/windows/x64/runner/Release/viiper.exe" -Force
+          Invoke-WebRequest `
+            -Uri "https://raw.githubusercontent.com/Alia5/VIIPER/main/LICENSE.txt" `
+            -OutFile "flutter/build/windows/x64/runner/Release/VIIPER-LICENSE.txt"
+          Invoke-WebRequest `
+            -Uri "https://github.com/vadimgrn/usbip-win2/releases/download/v.0.9.8.1/USBip-0.9.8.1-x64.exe" `
+            -OutFile "flutter/build/windows/x64/runner/Release/USBip-0.9.8.1-x64.exe"
+
       - name: Verify binary
         shell: pwsh
         run: |
@@ -248,7 +275,10 @@ jobs:
           foreach ($file in @(
             "flutter/build/windows/x64/runner/Release/rustdesk_hid.sys",
             "flutter/build/windows/x64/runner/Release/rustdesk_hid.inf",
-            "flutter/build/windows/x64/runner/Release/rustdesk_hid.cat"
+            "flutter/build/windows/x64/runner/Release/rustdesk_hid.cat",
+            "flutter/build/windows/x64/runner/Release/viiper.exe",
+            "flutter/build/windows/x64/runner/Release/USBip-0.9.8.1-x64.exe",
+            "flutter/build/windows/x64/runner/Release/VIIPER-LICENSE.txt"
           )) {
             if (-not (Test-Path $file)) { throw "Expected HID package file was not produced: $file" }
           }
