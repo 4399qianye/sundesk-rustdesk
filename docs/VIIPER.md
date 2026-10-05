@@ -7,7 +7,9 @@ generic USB/IP driver from `usbip-win2`.
 ## Requirements
 
 Install `usbip-win2` on the Windows target first. It provides the signed USB/IP
-kernel driver and `usbip.exe`; VIIPER alone is not sufficient.
+kernel driver and `usbip.exe`; VIIPER alone is not sufficient. RustDesk checks
+`PATH` and the standard `C:\Program Files\USBip` and
+`C:\Program Files (x86)\USBip` locations automatically.
 
 The Windows artifact contains `viiper.exe` and the `USBip-0.9.8.1-x64.exe`
 installer beside `rustdesk.exe`. Install USB/IP once as Administrator, then

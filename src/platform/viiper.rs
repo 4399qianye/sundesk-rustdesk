@@ -67,25 +67,22 @@ struct Backend {
 
 impl Backend {
     fn connect() -> Result<Self, String> {
-        if Command::new("where.exe")
-            .arg("usbip.exe")
-            .creation_flags(CREATE_NO_WINDOW)
-            .output()
-            .map_err(|e| format!("failed to locate usbip.exe: {e}"))?
-            .status
-            .success()
-            == false
-        {
-            return Err("usbip-win2 is not installed or usbip.exe is not on PATH".to_owned());
-        }
+        let usbip = usbip_path().ok_or_else(|| {
+            "usbip-win2 is not installed; expected usbip.exe in PATH or C:\\Program Files\\USBip".to_owned()
+        })?;
         let mut process = None;
         if api_request("ping", None).is_err() {
             let path = viiper_path().ok_or_else(|| {
                 "VIIPER is not running and viiper.exe was not found".to_owned()
             })?;
-            let child = Command::new(path)
+            let mut command = Command::new(path);
+            command
                 .arg("server")
                 .creation_flags(CREATE_NO_WINDOW)
+                // VIIPER invokes usbip.exe for local attachment. The USBip
+                // installer does not always add its directory to PATH.
+                .env("PATH", path_with_usbip(&usbip));
+            let child = command
                 .spawn()
                 .map_err(|e| format!("failed to start VIIPER: {e}"))?;
             process = Some(child);
@@ -295,6 +292,37 @@ fn viiper_path() -> Option<PathBuf> {
     }
     let path = std::env::current_exe().ok()?.parent()?.join("viiper.exe");
     path.is_file().then_some(path)
+}
+
+fn usbip_path() -> Option<PathBuf> {
+    let path_entries = std::env::var_os("PATH")
+        .into_iter()
+        .flat_map(|path| std::env::split_paths(&path).collect::<Vec<_>>());
+    let candidates = path_entries
+        .chain(std::env::var_os("ProgramFiles").map(|root| PathBuf::from(root).join("USBip")))
+        .chain(
+            std::env::var_os("ProgramFiles(x86)")
+                .map(|root| PathBuf::from(root).join("USBip")),
+        )
+        .flat_map(|root| {
+            vec![root.join("usbip.exe"), root.join("bin").join("usbip.exe")]
+        });
+    candidates.into_iter().find(|path| path.is_file())
+}
+
+fn path_with_usbip(usbip: &PathBuf) -> String {
+    let Some(parent) = usbip.parent() else {
+        return std::env::var("PATH").unwrap_or_default();
+    };
+    let mut paths = vec![parent.to_path_buf()];
+    paths.extend(
+        std::env::var_os("PATH")
+            .into_iter()
+            .flat_map(|path| std::env::split_paths(&path)),
+    );
+    std::env::join_paths(paths)
+        .map(|path| path.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }
 
 fn api_request(path: &str, payload: Option<Value>) -> Result<Value, String> {
