@@ -60,14 +60,128 @@ class _DesktopHomePageState extends State<DesktopHomePage>
     super.build(context);
     final isIncomingOnly = bind.isIncomingOnly();
     return _buildBlock(
-        child: Row(
-      crossAxisAlignment: CrossAxisAlignment.start,
-      children: [
-        buildLeftPane(context),
-        if (!isIncomingOnly) const VerticalDivider(width: 1),
-        if (!isIncomingOnly) Expanded(child: buildRightPane(context)),
-      ],
+        child: Container(
+      color: Theme.of(context).scaffoldBackgroundColor,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: [
+          buildNavigationRail(context),
+          if (!isIncomingOnly) const VerticalDivider(width: 1),
+          Expanded(child: buildWorkspace(context)),
+        ],
+      ),
     ));
+  }
+
+  Widget buildNavigationRail(BuildContext context) {
+    final muted = Theme.of(context).textTheme.bodySmall?.color?.withOpacity(.58);
+    final active = Theme.of(context).colorScheme.primary;
+    return Container(
+      width: 74,
+      color: Theme.of(context).colorScheme.background,
+      padding: const EdgeInsets.symmetric(vertical: 18),
+      child: Column(
+        children: [
+          Container(
+            width: 38,
+            height: 38,
+            decoration: BoxDecoration(
+              color: active,
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: const Icon(Icons.bolt_rounded, color: Colors.white),
+          ),
+          const SizedBox(height: 28),
+          _railAction(Icons.home_rounded, 'Home', active, selected: true),
+          _railAction(Icons.devices_other_rounded, 'Devices', muted),
+          _railAction(Icons.history_rounded, 'Recent sessions', muted),
+          const Spacer(),
+          _railAction(Icons.settings_outlined, 'Settings', muted,
+              onTap: () => DesktopTabPage.onAddSetting()),
+          _railAction(Icons.help_outline_rounded, 'Help', muted),
+        ],
+      ),
+    );
+  }
+
+  Widget _railAction(IconData icon, String label, Color? color,
+      {bool selected = false, VoidCallback? onTap}) {
+    return Tooltip(
+      message: translate(label),
+      child: InkWell(
+        onTap: onTap,
+        borderRadius: BorderRadius.circular(12),
+        child: Container(
+          width: 48,
+          height: 48,
+          margin: const EdgeInsets.symmetric(vertical: 4),
+          decoration: BoxDecoration(
+            color: selected ? color?.withOpacity(.12) : Colors.transparent,
+            borderRadius: BorderRadius.circular(12),
+          ),
+          child: Icon(icon, size: 21, color: color),
+        ),
+      ),
+    );
+  }
+
+  Widget buildWorkspace(BuildContext context) {
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        _buildWorkspaceHeader(context),
+        Expanded(
+          child: Row(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              buildLeftPane(context),
+              if (!bind.isIncomingOnly()) const VerticalDivider(width: 1),
+              if (!bind.isIncomingOnly())
+                Expanded(child: buildRightPane(context)),
+            ],
+          ),
+        ),
+      ],
+    );
+  }
+
+  Widget _buildWorkspaceHeader(BuildContext context) {
+    final text = Theme.of(context).textTheme;
+    return Container(
+      height: 70,
+      padding: const EdgeInsets.symmetric(horizontal: 26),
+      decoration: BoxDecoration(
+        color: Theme.of(context).scaffoldBackgroundColor,
+        border: Border(
+          bottom: BorderSide(
+              color: Theme.of(context).dividerColor.withOpacity(.45)),
+        ),
+      ),
+      child: Row(
+        children: [
+          Text(translate('Home'),
+              style: text.titleLarge?.copyWith(fontWeight: FontWeight.w700)),
+          const SizedBox(width: 12),
+          Text(
+            translate('Recent sessions'),
+            style: text.bodySmall?.copyWith(
+                  color: text.bodySmall?.color?.withOpacity(.58),
+                ),
+          ),
+          const Spacer(),
+          IconButton(
+            tooltip: translate('Settings'),
+            onPressed: () => DesktopTabPage.onAddSetting(),
+            icon: const Icon(Icons.settings_outlined),
+          ),
+          CircleAvatar(
+            radius: 17,
+            backgroundColor: Theme.of(context).colorScheme.primary,
+            child: const Icon(Icons.person_outline, color: Colors.white, size: 19),
+          ),
+        ],
+      ),
+    );
   }
 
   Widget _buildBlock({required Widget child}) {
@@ -129,7 +243,7 @@ class _DesktopHomePageState extends State<DesktopHomePage>
     return ChangeNotifierProvider.value(
       value: gFFI.serverModel,
       child: Container(
-        width: isIncomingOnly ? 280.0 : 200.0,
+        width: isIncomingOnly ? 280.0 : 236.0,
         color: Theme.of(context).colorScheme.background,
         child: Stack(
           children: [
