@@ -40,10 +40,18 @@ fn mouse_button_mask(button: i32) -> Option<u8> {
     }
 }
 
-#[derive(Default)]
 struct KeyboardState {
     modifiers: u8,
     keys: [bool; 256],
+}
+
+impl Default for KeyboardState {
+    fn default() -> Self {
+        Self {
+            modifiers: 0,
+            keys: [false; 256],
+        }
+    }
 }
 
 struct Backend {
