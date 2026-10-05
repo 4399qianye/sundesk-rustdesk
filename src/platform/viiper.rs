@@ -241,7 +241,7 @@ lazy_static::lazy_static! {
 }
 
 pub fn available() -> bool {
-    if std::env::var(VIIPER_ENABLE_ENV).ok().as_deref() != Some("1") {
+    if std::env::var(VIIPER_ENABLE_ENV).ok().as_deref() == Some("0") {
         return false;
     }
     match AVAILABILITY.load(Ordering::Relaxed) {

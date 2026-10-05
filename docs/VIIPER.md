@@ -1,6 +1,6 @@
 # VIIPER Input Backend
 
-RustDesk can optionally send Windows keyboard and relative mouse input through
+RustDesk sends Windows keyboard and relative mouse input through
 VIIPER. VIIPER creates standard HID devices in user space and uses the signed
 generic USB/IP driver from `usbip-win2`.
 
@@ -11,15 +11,14 @@ kernel driver and `usbip.exe`; VIIPER alone is not sufficient.
 
 The Windows artifact contains `viiper.exe` and the `USBip-0.9.8.1-x64.exe`
 installer beside `rustdesk.exe`. Install USB/IP once as Administrator, then
-enable the backend with:
+start RustDesk normally. The backend is enabled by default.
 
 ```powershell
-$env:RUSTDESK_VIIPER = "1"
 .\rustdesk.exe
 ```
 
-Or set `RUSTDESK_VIIPER=1` permanently for the user or service that launches
-RustDesk. Without this variable RustDesk keeps the normal input fallback.
+Set `RUSTDESK_VIIPER=0` to explicitly disable it and use the existing Windows
+input fallback.
 
 VIIPER listens on localhost TCP port `3242`. RustDesk starts the sidecar when
 needed, creates a virtual mouse and keyboard, and streams input reports to the
@@ -35,6 +34,6 @@ RustDesk binary.
   requests it.
 - The first USB/IP installation may require a reboot and can briefly restart
   USB devices.
-- VIIPER is currently opt-in through `RUSTDESK_VIIPER=1`.
+- VIIPER is enabled by default; use `RUSTDESK_VIIPER=0` to disable it.
 - If VIIPER is unavailable, RustDesk falls back to the existing Windows input
   path.
