@@ -42,8 +42,7 @@ class RelativeMouseModel {
 
   final RelativeMouseAccumulator _accumulator = RelativeMouseAccumulator();
 
-  // Native relative mouse mode support (macOS only)
-  // Uses CGAssociateMouseAndMouseCursorPosition to lock cursor and NSEvent monitor for raw delta.
+  // Native relative mouse mode support (macOS and Windows).
   static MethodChannel? _hostChannel;
   // The currently active model receiving native mouse delta events.
   // Note: Race condition between multiple sessions is not a concern here because
@@ -55,9 +54,8 @@ class RelativeMouseModel {
   static bool _hostChannelInitialized = false;
 
   /// Initialize the host channel for native relative mouse mode.
-  /// This should be called once when the app starts on macOS.
   static void initHostChannel() {
-    if (!isMacOS) return;
+    if (!isMacOS && !isWindows) return;
     if (_hostChannelInitialized) return;
     _hostChannelInitialized = true;
 
@@ -68,16 +66,27 @@ class RelativeMouseModel {
         final dx = args['dx'] as int;
         final dy = args['dy'] as int;
         _activeNativeModel?._onNativeMouseDelta(dx, dy);
+      } else if (call.method == 'onMouseButton') {
+        final args = call.arguments as Map<dynamic, dynamic>;
+        final button = args['button'] as int;
+        final down = args['down'] as bool;
+        _activeNativeModel?._onNativeMouseButton(button, down);
+      } else if (call.method == 'onMouseWheel') {
+        final args = call.arguments as Map<dynamic, dynamic>;
+        final value = args['value'] as int;
+        final horizontal = args['horizontal'] as bool;
+        _activeNativeModel?._onNativeMouseWheel(value, horizontal);
       }
       return null;
     });
   }
 
-  // TODO(perf): Consider routing native delta through RelativeMouseAccumulator/throttle
-  // if high-polling mice (e.g. 1000Hz+) cause message flooding on the network.
   void _onNativeMouseDelta(int dx, int dy) {
     if (!enabled.value) return;
-    // Send directly to remote without accumulator (native already provides integer deltas)
+    if (isWindows) {
+      sendRelativeMouseMove(dx.toDouble(), dy.toDouble());
+      return;
+    }
     _sendMouseMessageToSession({
       'type': 'move_relative',
       'x': '$dx',
@@ -85,8 +94,28 @@ class RelativeMouseModel {
     });
   }
 
+  void _onNativeMouseButton(int button, bool down) {
+    if (!enabled.value) return;
+    final peerButton = mouseButtonsToPeer(button);
+    if (peerButton.isEmpty) return;
+    _sendMouseMessageToSession({
+      'type': down ? 'mousedown' : 'mouseup',
+      'buttons': peerButton,
+    });
+  }
+
+  void _onNativeMouseWheel(int value, bool horizontal) {
+    if (!enabled.value || value == 0) return;
+    final amount = value > 0 ? -1 : 1;
+    _sendMouseMessageToSession({
+      'type': 'wheel',
+      'x': horizontal ? '$amount' : '0',
+      'y': horizontal ? '0' : '$amount',
+    });
+  }
+
   Future<bool> _enableNativeRelativeMouseMode() async {
-    if (!isMacOS) return false;
+    if (!isMacOS && !isWindows) return false;
     if (_hostChannel == null) {
       initHostChannel();
       if (_hostChannel == null) return false;
@@ -117,7 +146,7 @@ class RelativeMouseModel {
   }
 
   Future<void> _disableNativeRelativeMouseMode() async {
-    if (!isMacOS) return;
+    if (!isMacOS && !isWindows) return;
     if (_hostChannel == null) return;
 
     // Only the owning model should disable native mode to avoid
@@ -139,7 +168,10 @@ class RelativeMouseModel {
 
   // Whether native relative mouse mode is currently active for this model
   bool get _isNativeRelativeMouseModeActive =>
-      isMacOS && _activeNativeModel == this;
+      (isMacOS || isWindows) && _activeNativeModel == this;
+
+  bool get isNativeRelativeMouseModeActive =>
+      _isNativeRelativeMouseModeActive;
 
   // Pointer lock center in LOCAL widget coordinates (for delta calculation)
   Offset? _pointerLockCenterLocal;
@@ -338,8 +370,7 @@ class RelativeMouseModel {
     // Keep the shared pointer-in-image flag in sync.
     setPointerInsideImage(enter);
 
-    // macOS native mode: cursor is locked by CGAssociateMouseAndMouseCursorPosition,
-    // no need for recenter logic.
+    // Native modes provide raw deltas and do not need cursor recentering.
     if (_isNativeRelativeMouseModeActive) {
       return;
     }
@@ -356,24 +387,37 @@ class RelativeMouseModel {
     });
   }
 
-  void onWindowBlur() {
+  Future<void> onWindowBlur() async {
     if (!enabled.value) return;
 
     // Focus can change while the pointer is outside the window (e.g. taskbar activation).
     // Do not rely on the previous "pointer inside" state across focus boundaries.
     setPointerInsideImage(false);
-    // macOS native mode: don't call _releaseCursorClip as it would break CGAssociateMouseAndMouseCursorPosition
+    // Native mode owns the Windows input registration while the window is focused.
     if (!_isNativeRelativeMouseModeActive) {
       _releaseCursorClip();
+    } else if (isWindows) {
+      try {
+        await _hostChannel?.invokeMethod('disableNativeRelativeMouseMode');
+      } catch (e) {
+        debugPrint('[RelMouse] Failed to suspend Windows relative mode: $e');
+      }
     }
   }
 
-  void onWindowFocus() {
+  Future<void> onWindowFocus() async {
     if (!enabled.value) return;
 
-    // macOS native mode: cursor is already locked
+    // Native mode owns the platform input registration while the window is focused.
     if (_isNativeRelativeMouseModeActive) {
       setPointerInsideImage(false);
+      if (isWindows) {
+        try {
+          await _hostChannel?.invokeMethod('enableNativeRelativeMouseMode');
+        } catch (e) {
+          debugPrint('[RelMouse] Failed to resume Windows relative mode: $e');
+        }
+      }
       return;
     }
 
@@ -431,9 +475,8 @@ class RelativeMouseModel {
       try {
         if (isDesktop) {
           final requestId = ++_enableRequestId;
-          if (isMacOS) {
-            // macOS: Use native relative mouse mode with CGAssociateMouseAndMouseCursorPosition
-            // This locks the cursor in place and provides raw delta via NSEvent monitor.
+          if (isMacOS || isWindows) {
+            // Use the platform's native raw relative input path.
             _enableNativeRelativeMouseMode().then((success) {
               // Guard against stale callback: user may have toggled off relative mode
               // while the async enable was in progress.
@@ -446,7 +489,7 @@ class RelativeMouseModel {
               // Note: _enableNativeRelativeMouseMode already handles its own cleanup on failure
             });
           } else {
-            // Windows/Linux: Use Flutter-based cursor recenter approach
+            // Linux: Use the Flutter-based cursor recenter approach
             // Enable the state before calculating the lock. The previous order
             // made updatePointerLockCenter() skip ClipCursor and made the first
             // recenter return immediately because enabled was still false.
@@ -492,9 +535,7 @@ class RelativeMouseModel {
 
       // Desktop only: cursor manipulation
       if (isDesktop) {
-        if (isMacOS) {
-          // macOS: Disable native relative mouse mode
-          // This already calls CGAssociateMouseAndMouseCursorPosition(1) to re-associate mouse
+        if (isMacOS || isWindows) {
           _disableNativeRelativeMouseMode();
         } else {
           _releaseCursorClip();
@@ -703,6 +744,7 @@ class RelativeMouseModel {
   /// Send mouse button event without position (for relative mouse mode).
   Future<void> sendRelativeMouseButton(Map<String, dynamic> evt) async {
     if (!enabled.value) return;
+    if (_isNativeRelativeMouseModeActive) return;
     _ensurePointerLockEngaged();
 
     final rawType = evt['type'];

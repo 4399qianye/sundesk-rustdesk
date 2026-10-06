@@ -16,6 +16,8 @@
 
 #include <optional>
 #include <memory>
+#include <utility>
+#include <vector>
 
 #include "win32_desktop.h"
 
@@ -79,6 +81,85 @@ void ForceChildRefresh(HWND child) {
 
 }  // namespace
 
+bool FlutterWindow::EnableNativeRelativeMouseMode() {
+  if (native_relative_mouse_mode_) {
+    return true;
+  }
+
+  RAWINPUTDEVICE device{};
+  device.usUsagePage = 0x01;
+  device.usUsage = 0x02;
+  device.dwFlags = RIDEV_NOLEGACY;
+  device.hwndTarget = GetHandle();
+  if (!RegisterRawInputDevices(&device, 1, sizeof(device))) {
+    return false;
+  }
+
+  RECT client;
+  if (GetClientRect(GetHandle(), &client)) {
+    POINT top_left{client.left, client.top};
+    POINT bottom_right{client.right, client.bottom};
+    if (ClientToScreen(GetHandle(), &top_left) &&
+        ClientToScreen(GetHandle(), &bottom_right)) {
+      RECT clip{top_left.x, top_left.y, bottom_right.x, bottom_right.y};
+      ClipCursor(&clip);
+    }
+  }
+
+  native_relative_mouse_mode_ = true;
+  return true;
+}
+
+void FlutterWindow::DisableNativeRelativeMouseMode() {
+  if (native_relative_mouse_mode_) {
+    RAWINPUTDEVICE device{};
+    device.usUsagePage = 0x01;
+    device.usUsage = 0x02;
+    device.dwFlags = RIDEV_REMOVE;
+    device.hwndTarget = nullptr;
+    RegisterRawInputDevices(&device, 1, sizeof(device));
+  }
+  ClipCursor(nullptr);
+  native_relative_mouse_mode_ = false;
+}
+
+void FlutterWindow::SendNativeMouseDelta(int dx, int dy) {
+  if (!host_channel_ || (dx == 0 && dy == 0)) {
+    return;
+  }
+  flutter::EncodableMap args;
+  args[flutter::EncodableValue("dx")] = flutter::EncodableValue(dx);
+  args[flutter::EncodableValue("dy")] = flutter::EncodableValue(dy);
+  host_channel_->InvokeMethod(
+      "onMouseDelta",
+      std::make_unique<flutter::EncodableValue>(std::move(args)));
+}
+
+void FlutterWindow::SendNativeMouseButton(int button, bool down) {
+  if (!host_channel_) {
+    return;
+  }
+  flutter::EncodableMap args;
+  args[flutter::EncodableValue("button")] = flutter::EncodableValue(button);
+  args[flutter::EncodableValue("down")] = flutter::EncodableValue(down);
+  host_channel_->InvokeMethod(
+      "onMouseButton",
+      std::make_unique<flutter::EncodableValue>(std::move(args)));
+}
+
+void FlutterWindow::SendNativeMouseWheel(int value, bool horizontal) {
+  if (!host_channel_ || value == 0) {
+    return;
+  }
+  flutter::EncodableMap args;
+  args[flutter::EncodableValue("value")] = flutter::EncodableValue(value);
+  args[flutter::EncodableValue("horizontal")] =
+      flutter::EncodableValue(horizontal);
+  host_channel_->InvokeMethod(
+      "onMouseWheel",
+      std::make_unique<flutter::EncodableValue>(std::move(args)));
+}
+
 FlutterWindow::FlutterWindow(const flutter::DartProject& project)
     : project_(project) {}
 
@@ -101,13 +182,22 @@ bool FlutterWindow::OnCreate() {
   }
   RegisterPlugins(flutter_controller_->engine());
 
-  flutter::MethodChannel<> channel(
-    flutter_controller_->engine()->messenger(),
-    "org.rustdesk.rustdesk/host",
-    &flutter::StandardMethodCodec::GetInstance());
+  host_channel_ = std::make_unique<flutter::MethodChannel<>>(
+      flutter_controller_->engine()->messenger(),
+      "org.rustdesk.rustdesk/host",
+      &flutter::StandardMethodCodec::GetInstance());
 
-  channel.SetMethodCallHandler(
-    [](const flutter::MethodCall<>& call, std::unique_ptr<flutter::MethodResult<>> result) {
+  host_channel_->SetMethodCallHandler(
+    [this](const flutter::MethodCall<>& call, std::unique_ptr<flutter::MethodResult<>> result) {
+      if (call.method_name() == "enableNativeRelativeMouseMode") {
+        result->Success(EnableNativeRelativeMouseMode());
+        return;
+      }
+      if (call.method_name() == "disableNativeRelativeMouseMode") {
+        DisableNativeRelativeMouseMode();
+        result->Success(true);
+        return;
+      }
       if (call.method_name() == "bumpMouse") {
         auto arguments = call.arguments();
 
@@ -139,7 +229,9 @@ bool FlutterWindow::OnCreate() {
         bool succeeded = Win32Desktop::BumpMouse(dx, dy);
 
         result->Success(succeeded);
+        return;
       }
+      result->NotImplemented();
     });
 
   DesktopMultiWindowSetWindowCreatedCallback([](void *controller) {
@@ -163,6 +255,11 @@ bool FlutterWindow::OnCreate() {
 
 void FlutterWindow::OnDestroy() {
   KillTimer(GetHandle(), kForceRedrawTimerId);
+  DisableNativeRelativeMouseMode();
+  if (host_channel_) {
+    host_channel_->SetMethodCallHandler(nullptr);
+  }
+  host_channel_.reset();
   if (flutter_controller_) {
     flutter_controller_ = nullptr;
   }
@@ -174,6 +271,73 @@ LRESULT
 FlutterWindow::MessageHandler(HWND hwnd, UINT const message,
                               WPARAM const wparam,
                               LPARAM const lparam) noexcept {
+  if (message == WM_SETCURSOR && native_relative_mouse_mode_) {
+    SetCursor(nullptr);
+    return TRUE;
+  }
+
+  if (message == WM_INPUT && native_relative_mouse_mode_) {
+    if (GetForegroundWindow() != GetHandle()) {
+      return 0;
+    }
+    UINT size = 0;
+    if (GetRawInputData(reinterpret_cast<HRAWINPUT>(lparam), RID_INPUT,
+                        nullptr, &size, sizeof(RAWINPUTHEADER)) ==
+        static_cast<UINT>(-1)) {
+      return 0;
+    }
+    std::vector<BYTE> buffer(size);
+    if (GetRawInputData(reinterpret_cast<HRAWINPUT>(lparam), RID_INPUT,
+                        buffer.data(), &size, sizeof(RAWINPUTHEADER)) ==
+        static_cast<UINT>(-1)) {
+      return 0;
+    }
+    auto* raw = reinterpret_cast<RAWINPUT*>(buffer.data());
+    if (raw->header.dwType == RIM_TYPEMOUSE) {
+      const RAWMOUSE& mouse = raw->data.mouse;
+      if ((mouse.usFlags & MOUSE_MOVE_ABSOLUTE) == 0) {
+        SendNativeMouseDelta(mouse.lLastX, mouse.lLastY);
+      }
+      if (mouse.usButtonFlags & RI_MOUSE_LEFT_BUTTON_DOWN) {
+        SendNativeMouseButton(1, true);
+      }
+      if (mouse.usButtonFlags & RI_MOUSE_LEFT_BUTTON_UP) {
+        SendNativeMouseButton(1, false);
+      }
+      if (mouse.usButtonFlags & RI_MOUSE_RIGHT_BUTTON_DOWN) {
+        SendNativeMouseButton(2, true);
+      }
+      if (mouse.usButtonFlags & RI_MOUSE_RIGHT_BUTTON_UP) {
+        SendNativeMouseButton(2, false);
+      }
+      if (mouse.usButtonFlags & RI_MOUSE_MIDDLE_BUTTON_DOWN) {
+        SendNativeMouseButton(4, true);
+      }
+      if (mouse.usButtonFlags & RI_MOUSE_MIDDLE_BUTTON_UP) {
+        SendNativeMouseButton(4, false);
+      }
+      if (mouse.usButtonFlags & RI_MOUSE_BUTTON_4_DOWN) {
+        SendNativeMouseButton(8, true);
+      }
+      if (mouse.usButtonFlags & RI_MOUSE_BUTTON_4_UP) {
+        SendNativeMouseButton(8, false);
+      }
+      if (mouse.usButtonFlags & RI_MOUSE_BUTTON_5_DOWN) {
+        SendNativeMouseButton(16, true);
+      }
+      if (mouse.usButtonFlags & RI_MOUSE_BUTTON_5_UP) {
+        SendNativeMouseButton(16, false);
+      }
+      if (mouse.usButtonFlags & RI_MOUSE_WHEEL) {
+        SendNativeMouseWheel(static_cast<SHORT>(mouse.usButtonData), false);
+      }
+      if (mouse.usButtonFlags & RI_MOUSE_HWHEEL) {
+        SendNativeMouseWheel(static_cast<SHORT>(mouse.usButtonData), true);
+      }
+    }
+    return 0;
+  }
+
   // Give Flutter, including plugins, an opportunity to handle window messages.
   if (flutter_controller_) {
     std::optional<LRESULT> result =

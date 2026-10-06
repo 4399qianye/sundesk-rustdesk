@@ -1649,14 +1649,12 @@ class InputModel {
     return null;
   }
 
-  /// Handle scroll/wheel events.
-  /// Note: Scroll events intentionally use absolute positioning even in relative mouse mode.
-  /// This is because scroll events don't need relative positioning - they represent
-  /// scroll deltas that are independent of cursor position. Games and 3D applications
-  /// handle scroll events the same way regardless of mouse mode.
+  /// Handle scroll/wheel events from Flutter's pointer pipeline.
+  /// Native relative mode receives wheel events from the platform raw-input path.
   void onPointerSignalImage(PointerSignalEvent e) {
     if (isViewOnly) return;
     if (isViewCamera) return;
+    if (_relativeMouse.isNativeRelativeMouseModeActive) return;
     if (e is PointerScrollEvent) {
       final rawDx = e.scrollDelta.dx;
       final rawDy = e.scrollDelta.dy;

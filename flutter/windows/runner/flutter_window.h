@@ -3,6 +3,7 @@
 
 #include <flutter/dart_project.h>
 #include <flutter/flutter_view_controller.h>
+#include <flutter/method_channel.h>
 
 #include <memory>
 
@@ -36,6 +37,15 @@ class FlutterWindow : public Win32Window {
 
   // Number of force-redraw attempts made so far.
   UINT force_redraw_tries_ = 0;
+
+  std::unique_ptr<flutter::MethodChannel<>> host_channel_;
+  bool native_relative_mouse_mode_ = false;
+
+  bool EnableNativeRelativeMouseMode();
+  void DisableNativeRelativeMouseMode();
+  void SendNativeMouseDelta(int dx, int dy);
+  void SendNativeMouseButton(int button, bool down);
+  void SendNativeMouseWheel(int value, bool horizontal);
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_
